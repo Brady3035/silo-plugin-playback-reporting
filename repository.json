@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "community.playback-reporting",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -129,9 +129,9 @@
             "access": "admin"
           },
           {
-            "id": "save-colors",
+            "id": "save-settings",
             "method": "POST",
-            "path": "/settings/colors",
+            "path": "/settings",
             "access": "admin"
           },
           {
@@ -145,7 +145,7 @@
         "presentation": {
           "display_name": "Playback Reporting",
           "summary": "Reports on what your users watch: activity over time, per-user sessions and stream types, and a breakdown of movies, shows and audiobooks by plays, time or smart plays.",
-          "description_markdown": "Playback Reporting adds a **Playback Reporting** page to the admin menu. It reads Silo's own playback history, so it needs no database of its own and shows plays recorded before it was installed.\n\n- **Activity**: a bar graph of watch time, plays or smart plays per day, week or month, stacked by user (or by profile), media type or stream type, with a weekday-and-hour heatmap.\n- **Users**: pick a user or profile to see their total watch time, movies, episodes and audiobooks, how they stream (Direct Play, Remux, Transcode), and every playback session.\n- **Breakdown**: top movies, TV shows and audiobooks by plays, time, or smart plays, as a ranked list or a pie chart.\n- **History**: every play in a date range, with CSV export.\n\n**Smart plays** divide watch time by the length of the movie, episode or book, so two half-watched episodes count as one episode watched.\n\nWatch time is the time actually watched (Silo's measured watch time). Plays recorded before Silo measured watch time use an estimate and are marked with ≈.\n\nSettings let you hide plays shorter than a number of seconds and ignore accounts or profiles. Chart colors are picked on the report page under **Customize**. These only change the reports; Silo's history is untouched.\n\nAudiobooks appear when they are played in Silo's own apps. Listening in Audiobookshelf apps is not part of Silo's playback history.\n\nOptionally, the plugin can also record each play's client and whether it was local or remote, by watching live sessions. That setting is off by default.",
+          "description_markdown": "Playback Reporting adds a **Playback Reporting** page to the admin menu. It reads Silo's own playback history, so it needs no database of its own and shows plays recorded before it was installed.\n\n- **Activity**: a bar graph of watch time, plays or smart plays per day, week or month, stacked by user (or by profile), media type or stream type, with a weekday-and-hour heatmap.\n- **Users**: pick a user or profile to see their total watch time, movies, episodes and audiobooks, how they stream (Direct Play, Remux, Transcode), and every playback session.\n- **Breakdown**: top movies, TV shows and audiobooks by plays, time, or smart plays, as a ranked list or a pie chart.\n- **History**: every play in a date range, with CSV export.\n\n**Smart plays** divide watch time by the length of the movie, episode or book, so two half-watched episodes count as one episode watched.\n\nWatch time is the time actually watched (Silo's measured watch time). Plays recorded before Silo measured watch time use an estimate and are marked with ≈.\n\nSettings let you hide plays shorter than a number of seconds and ignore accounts or profiles. Chart colors, and whether audiobooks are included, are set on the report page under **Customize**. These only change the reports; Silo's history is untouched.\n\nAudiobooks are off by default; turn them on under **Customize**. They appear when played in Silo's own apps. Listening in Audiobookshelf apps is not part of Silo's playback history.\n\nOptionally, the plugin can also record each play's client and whether it was local or remote, by watching live sessions. That setting is off by default.",
           "setup_markdown": "1. In **Settings → API keys**, create a key on an **admin** account with no scopes. The plugin reads admin playback history, which no narrower scope covers yet, so the key can do anything that admin can. Keep it private.\n2. Open this plugin's settings, paste the key under **Silo connection**, and save.\n3. Open **Playback Reporting** from the admin menu. The first load can take a few seconds on a large history.\n4. Optional: turn on **Track clients** to also report which apps and networks plays came from. It only covers plays that start after you turn it on.",
           "homepage_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
           "source_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
@@ -154,19 +154,19 @@
         }
       },
       "repo_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
-      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.1/checksums.txt",
+      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.2/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.1/plugin-darwin-arm64",
-          "checksum": "4a5307fa99a6451728c0d5b0e7fb99d8c5c50e878f50cf87a703af0c3da2c0e3"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.2/plugin-darwin-arm64",
+          "checksum": "13a93089c1abbcbf2fe63dc3300d0dd2b387784ae33221b8d051fd7b4a4c67ae"
         },
         "linux/amd64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.1/plugin-linux-amd64",
-          "checksum": "091fd20d5e7ed9d16374945310ebadbd36e88f69c4bfc9d1181877cee563d14c"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.2/plugin-linux-amd64",
+          "checksum": "15bde928fe7b73d194f3f2a335d31b06dcf58da86b1b801346855961ccea1f09"
         },
         "linux/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.1/plugin-linux-arm64",
-          "checksum": "5911a8b33baf308dabdaa38607aa4cd418b55e78683c55e3bbc8f09f7c2cda70"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.2/plugin-linux-arm64",
+          "checksum": "c7dc099a6d6b00c3ad966af504c32ab45c0b22ac6a83340d7e3dec2cf4d9e892"
         }
       }
     }
