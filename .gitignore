@@ -1,0 +1,5 @@
+/plugin
+/release/
+/dist/
+go.local.mod
+go.local.sum

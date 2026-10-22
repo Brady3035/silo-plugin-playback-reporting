@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"{{if .Theme}} data-theme="{{.Theme}}"{{end}}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playback Reporting</title>
+<link rel="stylesheet" href="assets/app.css?v={{.Version}}">
+</head>
+<body>
+<header class="top">
+  <h1>Playback Reporting</h1>
+  <p class="status" id="status" aria-live="polite">{{if .Problem}}Not set up yet{{else}}Loading playback history…{{end}}</p>
+</header>
+{{if .Problem}}
+<main class="setup">
+  <section class="panel">
+    <h2>Finish setting up</h2>
+    <p>{{.Problem}}</p>
+    <p>Create the key under <strong>Settings → API keys</strong> on an admin account, without scopes, then save it in this plugin's settings.</p>
+  </section>
+</main>
+{{else}}
+<nav class="tabs" role="tablist" aria-label="Reports" id="tabs">
+  <button type="button" role="tab" id="tab-activity" data-tab="activity" aria-controls="main" aria-selected="true">Activity</button>
+  <button type="button" role="tab" id="tab-users" data-tab="users" aria-controls="main" aria-selected="false">Users</button>
+  <button type="button" role="tab" id="tab-breakdown" data-tab="breakdown" aria-controls="main" aria-selected="false">Breakdown</button>
+  <button type="button" role="tab" id="tab-clients" data-tab="clients" aria-controls="main" aria-selected="false" hidden>Clients</button>
+  <button type="button" role="tab" id="tab-history" data-tab="history" aria-controls="main" aria-selected="false">History</button>
+</nav>
+<main id="main" role="tabpanel">
+  <section class="panel loading" id="loading"><div class="spinner" aria-hidden="true"></div><p>Loading playback history…</p></section>
+</main>
+{{end}}
+<script src="assets/app.js?v={{.Version}}" defer></script>
+</body>
+</html>

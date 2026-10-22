@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve modules
+        run: go mod tidy
+
+      - run: make check
+
+      - name: Build every release platform
+        run: make dist VERSION=0.0.0-ci
+
+      # Keeps go.sum in the repository so builds are pinned. Only on main,
+      # and only when tidy changed something.
+      - name: Commit go.mod and go.sum
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet -- go.mod go.sum && git ls-files --error-unmatch go.sum >/dev/null 2>&1; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          git commit -m "chore: update go.sum"
+          git push origin HEAD:main
