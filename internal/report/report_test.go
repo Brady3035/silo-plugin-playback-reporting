@@ -304,18 +304,148 @@ func TestTrackerKeepsClientsAndTheMostTranscodedMethod(t *testing.T) {
 		t.Fatalf("s2 falls back to the client label: %+v", got)
 	}
 
-	// Enough sessions to need several state chunks survive a restart.
-	for i := range 6000 {
-		tr.sessions[fmt.Sprintf("bulk-%05d-%s", i, strings.Repeat("x", 30))] = ClientInfo{Client: "Some long client name 1.2.3", Location: "local", Method: "direct", Seen: int64(i)}
+}
+
+// bulkSessions adds n sessions first seen in the given month.
+func bulkSessions(tr *Tracker, month time.Time, n int, prefix string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for i := range n {
+		info := ClientInfo{Client: "Some long client name 1.2.3", Location: "local", Method: "direct",
+			Seen: month.Unix() + int64(i), First: month.Unix() + int64(i)}
+		tr.sessions[fmt.Sprintf("%s-%07d-%x", prefix, i, i*2654435761)] = info
+		tr.dirty[info.month()] = true
 	}
-	tr.dirty = true
+}
+
+// countingState records which keys each save writes.
+type countingState struct {
+	memState
+	writes map[string]int
+}
+
+func (c *countingState) WriteInstanceState(ctx context.Context, key string, value []byte) error {
+	c.writes[key]++
+	return c.memState.WriteInstanceState(ctx, key, value)
+}
+
+func TestTrackerSavesMonthsIntoSlots(t *testing.T) {
+	defer func(old int) { maxSlotBytes = old }(maxSlotBytes)
+	maxSlotBytes = 16 << 10 // small slots, so a month needs several
+	state := &countingState{memState: memState{}, writes: map[string]int{}}
+	tr := NewTracker(&fakeSessions{pages: [][]silo.LiveSession{{}}}, state, quiet)
+	sep := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	oct := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	bulkSessions(tr, sep, 3000, "sep")
+	bulkSessions(tr, oct, 3000, "oct")
 	tr.save(t.Context())
-	if len(state) < 3 {
-		t.Fatalf("saved in %d keys, want several chunks", len(state))
+	if len(tr.index.Months) != 2 || len(tr.index.Months["2026-09"]) < 2 {
+		t.Fatalf("index %+v", tr.index.Months)
 	}
-	restored := NewTracker(f, state, quiet)
+	for k, v := range state.memState {
+		if len(v) > maxSlotBytes && k != stateKeyIndex {
+			t.Fatalf("%s is %d bytes", k, len(v))
+		}
+	}
+
+	// A change in October rewrites October's slots only, into fresh slots.
+	octSlots := append([]int(nil), tr.index.Months["2026-10"]...)
+	sepSlots := append([]int(nil), tr.index.Months["2026-09"]...)
+	state.writes = map[string]int{}
+	bulkSessions(tr, oct, 10, "late")
+	tr.save(t.Context())
+	for _, s := range sepSlots {
+		if state.writes[slotKey(s)] != 0 {
+			t.Fatalf("September slot %d was rewritten", s)
+		}
+	}
+	for _, s := range tr.index.Months["2026-10"] {
+		for _, old := range octSlots {
+			if s == old {
+				t.Fatalf("October reused slot %d before its new copy was indexed", s)
+			}
+		}
+	}
+
+	restored := NewTracker(nil, state, quiet)
 	if !restored.load(t.Context()) || len(restored.sessions) != len(tr.sessions) {
 		t.Fatalf("restored %d sessions, want %d", len(restored.sessions), len(tr.sessions))
+	}
+	if got, ok := restored.Lookup("sep-0000007-" + fmt.Sprintf("%x", 7*2654435761)); !ok || got.Client != "Some long client name 1.2.3" {
+		t.Fatalf("lookup after restore: %+v %v", got, ok)
+	}
+}
+
+func TestTrackerMigratesTheOldLayout(t *testing.T) {
+	state := memState{}
+	old := map[string]ClientInfo{"a": {Client: "Infuse", Location: "local", Method: "remux", Seen: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC).Unix()},
+		"b": {Client: "Silo Web", Location: "remote", Method: "transcode", Seen: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()}}
+	raw, _ := json.Marshal(old)
+	state[stateKeyCount] = []byte("1")
+	state[slotKey(0)] = raw
+
+	tr := NewTracker(nil, state, quiet)
+	if !tr.load(t.Context()) || len(tr.sessions) != 2 || tr.migrating != 1 {
+		t.Fatalf("old layout: %d sessions, migrating %d", len(tr.sessions), tr.migrating)
+	}
+	tr.save(t.Context())
+	if string(state[stateKeyCount]) != "0" || len(tr.index.Months) != 2 {
+		t.Fatalf("after migration: count %q index %+v", state[stateKeyCount], tr.index.Months)
+	}
+	for _, slots := range tr.index.Months {
+		for _, s := range slots {
+			if s == 0 {
+				t.Fatal("the old chunk's key was overwritten before the new index was saved")
+			}
+		}
+	}
+	again := NewTracker(nil, state, quiet)
+	if !again.load(t.Context()) || len(again.sessions) != 2 {
+		t.Fatalf("reloaded %d sessions", len(again.sessions))
+	}
+	if got, _ := again.Lookup("b"); got.Method != "transcode" || got.month() != "2026-10" {
+		t.Fatalf("b = %+v", got)
+	}
+}
+
+func TestTrackerDropsOldestMonthsWhenFull(t *testing.T) {
+	defer func(old int) { maxSlotBytes = old }(maxSlotBytes)
+	maxSlotBytes = 2 << 10
+	state := memState{}
+	tr := NewTracker(nil, state, quiet)
+	// Enough months of sessions to need more than the slot pool.
+	start := time.Date(2020, 1, 15, 0, 0, 0, 0, time.UTC)
+	for m := range 90 {
+		bulkSessions(tr, start.AddDate(0, m, 0), 300, fmt.Sprintf("m%02d", m))
+	}
+	tr.save(t.Context())
+	t.Logf("%d months kept of 90", len(tr.index.Months))
+	slots := 0
+	for _, s := range tr.index.Months {
+		slots += len(s)
+	}
+	if slots > maxSlots || slots == 0 {
+		t.Fatalf("%d slots used", slots)
+	}
+	if _, ok := tr.index.Months["2020-01"]; ok {
+		t.Fatal("the oldest month was kept")
+	}
+	if _, ok := tr.index.Months[start.AddDate(0, 89, 0).Format("2006-01")]; !ok {
+		t.Fatal("the newest month was dropped")
+	}
+	keys := 0
+	for k := range state {
+		if strings.HasPrefix(k, stateKeyPrefix) {
+			keys++
+		}
+	}
+	if keys > maxSlots+2 {
+		t.Fatalf("%d keys written", keys)
+	}
+	for _, info := range tr.sessions {
+		if info.month() == "2020-01" {
+			t.Fatal("dropped sessions are still in memory")
+		}
 	}
 }
 

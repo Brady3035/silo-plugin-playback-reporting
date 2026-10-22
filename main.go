@@ -62,9 +62,35 @@ func (a *app) configure(_ context.Context, entries []*pluginv1.ConfigEntry) erro
 			go tracker.Run(context.Background())
 		}
 		a.handler.Configure(syncer, tracker, "")
+		check := func(ctx context.Context) report.CheckResult {
+			return report.RunCheck(ctx, lazy, cfg.TrackClients, time.Now())
+		}
+		a.handler.SetChecker(check)
+		go a.startupCheck(check)
 		go syncer.Run(context.Background())
 	})
 	return nil
+}
+
+// startupCheck checks the key once the host connection is up, so the page
+// and the host log say right away if something is wrong.
+func (a *app) startupCheck(check func(context.Context) report.CheckResult) {
+	var r report.CheckResult
+	for attempt := 0; attempt < 12; attempt++ {
+		r = check(context.Background())
+		// Finding the address needs the host connection, which can arrive a
+		// moment after the plugin starts.
+		if len(r.Steps) == 0 || r.Steps[0].State != "fail" || sdkruntime.Host() != nil {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	a.handler.SetCheck(r)
+	if problem := r.FirstProblem(); problem != "" {
+		a.logger.Warn("connection check failed", "problem", problem)
+	} else {
+		a.logger.Info("connection check passed", "server", r.Server, "account", r.Account)
+	}
 }
 
 type config struct {
@@ -139,6 +165,15 @@ func (l *lazyClient) get(ctx context.Context) (*silo.Client, error) {
 	}
 	l.client = silo.New(base, l.cfg.APIKey, nil)
 	return l.client, nil
+}
+
+// Client gives the connection check a connected client.
+func (l *lazyClient) Client(ctx context.Context) (report.Probe, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func (l *lazyClient) HistoryPage(ctx context.Context, endedAfter time.Time, cursor string) ([]silo.HistoryEntry, string, error) {

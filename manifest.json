@@ -39,6 +39,12 @@
       "access": "admin"
     },
     {
+      "id": "check",
+      "method": "GET",
+      "path": "/check",
+      "access": "admin"
+    },
+    {
       "id": "save-settings",
       "method": "POST",
       "path": "/settings",
@@ -64,7 +70,7 @@
           {
             "key": "api_key",
             "label": "Admin API key",
-            "description": "Starts with sa_. Stored encrypted by Silo and only sent to this server.",
+            "description": "Starts with sa_. Stored encrypted by Silo and only sent to this server. After saving, the report page's connection check says whether the key works.",
             "control": "ADMIN_FORM_CONTROL_PASSWORD",
             "secret": true,
             "required": true,
@@ -131,7 +137,7 @@
           {
             "key": "track_clients",
             "label": "Track clients",
-            "description": "Watch live sessions every 15 seconds and remember each play's client app and whether it was local or remote. Covers plays that start after it is turned on; very short plays can be missed.",
+            "description": "Watch live sessions every 15 seconds and remember each play's client app, whether it was local or remote, and how it was really played. Stored in Silo, about 2 million plays' worth. Covers plays that start after it is turned on; plays shorter than about 15 seconds can be missed.",
             "control": "ADMIN_FORM_CONTROL_SWITCH",
             "default_value": false
           }

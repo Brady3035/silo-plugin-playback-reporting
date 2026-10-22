@@ -14,7 +14,7 @@
       <h1>Playback Reporting</h1>
       <p class="status" id="status" aria-live="polite">{{if .Problem}}Not set up yet{{else}}Loading playback history…{{end}}</p>
     </div>
-    {{if not .Problem}}<button type="button" class="small" id="customize" disabled><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="5" cy="6" r="2.2" fill="currentColor"/><circle cx="11" cy="6" r="2.2" fill="currentColor" opacity=".6"/><circle cx="8" cy="11" r="2.2" fill="currentColor" opacity=".35"/></svg>Customize</button>{{end}}
+    {{if not .Problem}}<div class="top-actions"><button type="button" class="small conn" id="conn" data-state="checking"><span class="conn-dot" aria-hidden="true"></span><span id="conn-label">Checking connection…</span></button><button type="button" class="small" id="customize" disabled><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="5" cy="6" r="2.2" fill="currentColor"/><circle cx="11" cy="6" r="2.2" fill="currentColor" opacity=".6"/><circle cx="8" cy="11" r="2.2" fill="currentColor" opacity=".35"/></svg>Customize</button></div>{{end}}
   </div>
 </header>
 {{if .Problem}}
@@ -38,6 +38,7 @@
 </main>
 {{end}}
 <script type="application/json" id="saved-colors">{{.Colors}}</script>
+<script type="application/json" id="last-check">{{.Check}}</script>
 <script src="assets/app.js?v={{.Version}}" defer></script>
 </body>
 </html>

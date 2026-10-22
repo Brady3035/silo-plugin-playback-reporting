@@ -39,10 +39,50 @@ type Handler struct {
 	problem string
 	options *Options
 
+	// checker runs the connection check; lastCheck is its latest result.
+	checker   func(context.Context) CheckResult
+	checkMu   sync.Mutex
+	lastCheck *CheckResult
+
 	// State stores saved chart colors; nil in tests that don't need it.
 	State       StateStore
 	colorMu     sync.Mutex
 	savedColors *ColorSettings
+}
+
+// SetChecker sets how the page's "Check again" runs the connection check.
+func (h *Handler) SetChecker(run func(context.Context) CheckResult) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.checker = run
+}
+
+// SetCheck records a check result (the one run at startup).
+func (h *Handler) SetCheck(r CheckResult) {
+	h.checkMu.Lock()
+	defer h.checkMu.Unlock()
+	h.lastCheck = &r
+}
+
+func (h *Handler) latestCheck() *CheckResult {
+	h.checkMu.Lock()
+	defer h.checkMu.Unlock()
+	return h.lastCheck
+}
+
+// check runs the connection check again, at most every few seconds.
+func (h *Handler) check(ctx context.Context) *pluginv1.HandleHTTPResponse {
+	h.mu.RLock()
+	run := h.checker
+	h.mu.RUnlock()
+	if run == nil {
+		return jsonResponse(http.StatusServiceUnavailable, []byte(`{"error":"The connection check isn't available until an API key is saved."}`))
+	}
+	if last := h.latestCheck(); last == nil || h.clock().Sub(last.At) > 3*time.Second {
+		h.SetCheck(run(ctx))
+	}
+	body, _ := json.Marshal(h.latestCheck())
+	return jsonResponse(http.StatusOK, body)
 }
 
 // SetOptions sets the report settings (hidden plays, colors).
@@ -86,6 +126,8 @@ func (h *Handler) Handle(ctx context.Context, req *pluginv1.HandleHTTPRequest) (
 		return h.page(ctx, req), nil
 	case p == "/data":
 		return h.data(req), nil
+	case p == "/check":
+		return h.check(ctx), nil
 	case strings.HasPrefix(p, "/assets/"):
 		return asset(strings.TrimPrefix(p, "/assets/")), nil
 	}
@@ -115,6 +157,7 @@ func (h *Handler) page(ctx context.Context, req *pluginv1.HandleHTTPRequest) *pl
 		"Viewer":  header(req, "X-Silo-User-Name"),
 		"Problem": problem,
 		"Colors":  h.colors(ctx),
+		"Check":   h.latestCheck(),
 	})
 	if err != nil {
 		return text(http.StatusInternalServerError, "page failed to render")

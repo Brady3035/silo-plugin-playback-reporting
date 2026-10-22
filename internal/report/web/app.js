@@ -568,11 +568,19 @@
   }
 
   // barList is a ranked list with proportional bars.
-  function barList(groups, label, valueText, subText, color, limit) {
+  // barList is a ranked list with proportional bars. pick, when given,
+  // makes each row open something (with its hint as the tooltip).
+  function barList(groups, label, valueText, subText, color, limit, pick) {
     if (!groups.length) return empty();
     const top = Math.max(1e-9, groups[0].value);
     const list = el("ol", { class: "bars" });
-    const draw = (n) => list.replaceChildren(...groups.slice(0, n).map((g, i) => el("li", { class: "bar" },
+    const row = (g) => {
+      if (!pick) return { class: "bar" };
+      const go = () => pick.open(g);
+      return { class: "bar pickable", tabindex: "0", role: "link", title: pick.hint(g), onclick: go,
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } } };
+    };
+    const draw = (n) => list.replaceChildren(...groups.slice(0, n).map((g, i) => el("li", row(g),
       el("span", { class: "rank", text: String(i + 1) }),
       el("span", { class: "name", title: label(g), text: label(g) }),
       el("span", { class: "num", text: valueText(g) }),
@@ -655,7 +663,8 @@
         panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what)),
         el("div", { class: "grid2" },
           panel(split ? "By profile" : "By user", barList(people, (g) => (split ? who(g.items[0]) : g.items[0].user), (g) => fmt(g.value),
-            (g) => `${num(g.plays)} plays · ${hours(g.time)}`, stack === "user" ? (g) => colorOf.get(g.key) || "var(--c-other)" : null, 15)),
+            (g) => `${num(g.plays)} plays · ${hours(g.time)}`, stack === "user" ? (g) => colorOf.get(g.key) || "var(--c-other)" : null, 15,
+            { hint: (g) => `Open ${split ? who(g.items[0]) : g.items[0].user} in Users`, open: (g) => openUser(g.items[0], split) })),
           panel(`${what} by weekday and hour`, heatmap(plays, measure), el("p", { class: "note", text: "Your local time. Watch time is spread over the hours a play ran." }))));
     };
     view.append(toolbar(
@@ -696,6 +705,21 @@
           [{ name: { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure], value: fmt(v), strong: true }]));
         return cell;
       })]));
+  }
+
+  // openUser shows one user (or one profile) on the Users tab over the same
+  // dates the Activity tab is showing.
+  function openUser(p, withProfile) {
+    setSetting("users", "user", p.userId);
+    setSetting("users", "profile", withProfile ? p.profile : "");
+    for (const k of ["range", "from", "to"]) setSetting("users", k, setting("activity", k, k === "range" ? "30" : ""));
+    if (state.tableFilters) delete state.tableFilters.users;
+    state.page.users = 0;
+    state.tab = "users"; remember("tab", "users");
+    render();
+    window.scrollTo(0, 0);
+    const tab = $("tab-users");
+    if (tab) tab.focus({ preventScroll: true });
   }
 
   // ---------- Users tab ----------
@@ -1186,7 +1210,84 @@
   }
 
   function wireHeader() {
+    $("conn").addEventListener("click", () => openCheck());
+    showCheck();
+    // The startup check may still be running when the page opens.
+    if (!state.check) setTimeout(() => runCheck().catch(() => {}), 1500);
     $("customize").addEventListener("click", () => openCustomize());
+  }
+
+  // ---------- Connection check ----------
+  // The plugin checks Silo and the API key when it starts; the header shows
+  // the result and the dialog can run it again.
+  const STEP_ICON = { ok: "✓", fail: "✕", warn: "!", skip: "–" };
+  const STEP_WORD = { ok: "Passed", fail: "Failed", warn: "Warning", skip: "Skipped" };
+  state.check = (() => { try { return JSON.parse(($("last-check") || {}).textContent || "null"); } catch (_) { return null; } })();
+
+  function showCheck() {
+    const btn = $("conn"), label = $("conn-label");
+    if (!btn) return;
+    const c = state.check;
+    const st = !c ? "checking" : c.ok ? (c.steps.some((x) => x.state === "warn") ? "warn" : "ok") : "fail";
+    btn.dataset.state = st;
+    label.textContent = { checking: "Checking connection…", ok: "Connected", warn: "Connected, with a warning", fail: "Connection problem" }[st];
+    btn.title = c && c.account ? `Signed in to ${c.server} with ${c.account}'s key` : "";
+    // A failed check also gets a banner above the reports.
+    const old = $("conn-banner");
+    if (old) old.remove();
+    if (c && !c.ok && main) {
+      const first = c.steps.find((x) => x.state === "fail");
+      main.before(el("div", { class: "banner", id: "conn-banner", role: "alert" },
+        el("strong", { text: "Playback Reporting can't fully reach Silo. " }),
+        first ? `${first.name}: ${first.detail || "failed"}` : "",
+        el("button", { type: "button", class: "small link", text: "Details", onclick: () => openCheck() })));
+    }
+  }
+
+  async function runCheck() {
+    const res = await fetch("check", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (res.status === 401 || res.status === 403) throw new Error("Your access to this page expired. Open Playback Reporting again from the admin menu to check again.");
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `The plugin answered ${res.status}.`);
+    state.check = body;
+    showCheck();
+    return body;
+  }
+
+  function openCheck() {
+    const list = el("ol", { class: "check-steps" });
+    const meta = el("p", { class: "note" });
+    const msg = el("p", { class: "dlg-msg", role: "status", "aria-live": "polite" });
+    const draw = () => {
+      const c = state.check;
+      if (!c) { list.replaceChildren(el("li", { class: "step skip" }, "The first check is still running.")); meta.textContent = ""; return; }
+      list.replaceChildren(...c.steps.map((x) => el("li", { class: `step ${x.state}` },
+        el("span", { class: "icon", "aria-hidden": "true", text: STEP_ICON[x.state] || "?" }),
+        el("span", { class: "sr", text: STEP_WORD[x.state] + ": " }),
+        el("span", { class: "s-name", text: x.name }),
+        x.detail ? el("span", { class: "s-detail", text: x.detail }) : null)));
+      meta.textContent = [c.server ? `Server: ${c.server}` : null, c.account ? `Key: ${c.account}` : null,
+        `Checked ${dateTimeFmt.format(new Date(c.at))}`].filter(Boolean).join(" · ");
+    };
+    draw();
+    const again = el("button", { type: "button", class: "small primary", text: "Check again" });
+    again.addEventListener("click", async () => {
+      again.disabled = true; msg.classList.remove("error"); msg.textContent = "Checking…";
+      try { await runCheck(); msg.textContent = state.check.ok ? "Everything works." : "Some steps failed; see below."; draw(); }
+      catch (err) { msg.classList.add("error"); msg.textContent = err.message; }
+      again.disabled = false;
+    });
+    const close = () => { dlg.close(); dlg.remove(); };
+    const dlg = el("dialog", { class: "dlg", "aria-labelledby": "check-title" },
+      el("div", { class: "dlg-head" }, el("h2", { id: "check-title", text: "Connection to Silo" }),
+        el("button", { type: "button", class: "icon", "aria-label": "Close", onclick: close }, "×")),
+      el("div", { class: "dlg-body" }, list, meta,
+        el("p", { class: "note", text: "The plugin reads Silo's playback history with the API key in its settings. Change the key or server address there; the plugin restarts and checks again." })),
+      msg,
+      el("div", { class: "dlg-foot" }, el("span", { class: "grow" }), el("button", { type: "button", class: "small", text: "Close", onclick: close }), again));
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+    document.body.append(dlg);
+    dlg.showModal();
   }
 
   // ---------- tabs ----------

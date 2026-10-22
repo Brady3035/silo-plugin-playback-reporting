@@ -112,6 +112,41 @@ func (c *Client) SessionsPage(ctx context.Context, cursor string) (items []LiveS
 	return out.Items, next, nil
 }
 
+// Account is the part of GET /api/v2/account/me the connection check uses:
+// whose key this is.
+type Account struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+// Account reads the account the API key belongs to.
+func (c *Client) Account(ctx context.Context) (Account, error) {
+	var out Account
+	err := c.get(ctx, "/api/v2/account/me", url.Values{}, &out)
+	return out, err
+}
+
+// ProbeHistory reads one history entry, to check the key can.
+func (c *Client) ProbeHistory(ctx context.Context) error {
+	var out page[json.RawMessage]
+	return c.get(ctx, "/api/v2/admin/playback-history", url.Values{"limit": {"1"}}, &out)
+}
+
+// ProbeSessions reads one live session, to check the key can.
+func (c *Client) ProbeSessions(ctx context.Context) error {
+	var out page[json.RawMessage]
+	return c.get(ctx, "/api/v2/admin/sessions", url.Values{"limit": {"1"}}, &out)
+}
+
+// Base is the address the client calls.
+func (c *Client) Base() string { return c.base }
+
+// NetworkError is a request that got no HTTP answer from Silo.
+type NetworkError struct{ Err error }
+
+func (e *NetworkError) Error() string { return e.Err.Error() }
+func (e *NetworkError) Unwrap() error { return e.Err }
+
 // StatusError is a non-2xx answer from Silo.
 type StatusError struct {
 	Status int
@@ -154,7 +189,7 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return &NetworkError{Err: err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
