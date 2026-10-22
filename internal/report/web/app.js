@@ -446,60 +446,106 @@
   // stackedColumns draws one column per bucket with a stack per series.
   // Hovering a column dims the others and lists its series; hovering a
   // legend item dims the other series. Returns [chart, legend].
+  // The column chart is drawn at its real pixel width (and redrawn when that
+  // changes) so text and bars stay their designed size on any screen,
+  // instead of stretching a fixed viewBox.
+  let lastChartWidth = 760;
   function stackedColumns(b, series, fmt, what) {
-    const W = 760, H = 260, L = 52, B = 24, T = 10;
     const totals = b.list.map((_, i) => series.reduce((s, x) => s + x.values[i], 0));
-    const maxV = Math.max(1e-9, ...totals);
-    const step = (W - L) / b.list.length;
-    const bw = Math.max(1, Math.min(32, step * 0.72));
-    const y = (v) => H - B - (v / maxV) * (H - B - T);
-    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${what} per ${b.unit}` });
-    const grid = svg("g", { class: "grid" });
-    for (let i = 0; i <= 4; i++) {
-      const v = (maxV * i) / 4, yy = y(v);
-      grid.append(svg("line", { x1: L, x2: W, y1: yy, y2: yy }), svg("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, fmt(v)));
-    }
-    root.append(grid);
-    const band = svg("rect", { class: "band", x: 0, y: T, width: step, height: H - B - T, visibility: "hidden" });
-    root.append(band);
-    const labelEvery = Math.ceil(b.list.length / 9);
-    const cols = [];
-    b.list.forEach((t, i) => {
-      let base = 0;
-      const x = L + i * step + (step - bw) / 2;
-      const col = svg("g", { class: "col" });
-      series.forEach((s, si) => {
-        const v = s.values[i];
-        if (v > 0) {
-          const top = y(base + v), h = Math.max(0.5, y(base) - top);
-          col.append(svg("rect", { x, y: top, width: bw, height: h, fill: s.color, "data-s": si, rx: Math.min(2, bw / 4) }));
-        }
-        base += v;
+    // Gridlines land on round values: whole minutes/hours for watch time,
+    // 1-2-2.5-5 steps for counts.
+    const rawMax = Math.max(1e-9, ...totals);
+    const tickStep = (() => {
+      const target = rawMax / 4;
+      if (fmt === hours) {
+        const steps = [60, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
+        return steps.find((x) => x >= target) || Math.ceil(target / 86400) * 86400;
+      }
+      const mag = Math.pow(10, Math.floor(Math.log10(target)));
+      const mults = fmt === num && mag < 10 ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10];
+      const step = mults.map((m) => m * mag).find((x) => x >= target);
+      return fmt === num ? Math.max(1, step) : step;
+    })();
+    const ticks = Math.max(1, Math.ceil(rawMax / tickStep - 1e-9));
+    const maxV = ticks * tickStep;
+    const wrap = el("div", { class: "chart" });
+    let root = null, focused = -1, drawnW = 0;
+    const draw = (W) => {
+      W = Math.max(280, Math.round(W));
+      if (W === drawnW) return;
+      drawnW = W;
+      // Left margin fits the widest axis label (12px text ≈ 7px per character).
+      const longest = Math.max(...Array.from({ length: ticks + 1 }, (_, i) => fmt(tickStep * i).length));
+      const H = Math.round(Math.min(380, Math.max(220, W * 0.26))), L = Math.max(40, longest * 7 + 14), B = 26, T = 10;
+      const step = (W - L) / b.list.length;
+      const bw = Math.max(1, Math.min(56, step * 0.72));
+      const y = (v) => H - B - (v / maxV) * (H - B - T);
+      const svgEl = svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": `${what} per ${b.unit}` });
+      const grid = svg("g", { class: "grid" });
+      for (let i = 0; i <= ticks; i++) {
+        const v = tickStep * i, yy = y(v);
+        grid.append(svg("line", { x1: L, x2: W, y1: yy, y2: yy }), svg("text", { x: L - 8, y: yy + 4, "text-anchor": "end" }, fmt(v)));
+      }
+      svgEl.append(grid);
+      const band = svg("rect", { class: "band", x: 0, y: T, width: step, height: H - B - T, visibility: "hidden" });
+      svgEl.append(band);
+      // Roughly one date label per 80px keeps them from colliding.
+      const labelEvery = Math.max(1, Math.ceil(b.list.length / Math.max(2, Math.floor((W - L) / 80))));
+      b.list.forEach((t, i) => {
+        let base = 0;
+        const x = L + i * step + (step - bw) / 2;
+        const col = svg("g", { class: "col" });
+        series.forEach((s, si) => {
+          const v = s.values[i];
+          if (v > 0) {
+            const top = y(base + v), h = Math.max(0.5, y(base) - top);
+            col.append(svg("rect", { x, y: top, width: bw, height: h, fill: s.color, "data-s": si, rx: Math.min(3, bw / 4) }));
+          }
+          base += v;
+        });
+        // A full-height hit area so short columns are easy to hover.
+        const hit = svg("rect", { class: "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
+        col.append(hit);
+        hover(hit, () => {
+          const rows = series.map((s) => ({ name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
+          return tipRows(bucketTitle(b.unit, t), [
+            { name: "Total", value: fmt(totals[i]), strong: true },
+            ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]) })),
+          ], rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played");
+        }, () => {
+          svgEl.classList.add("hovering"); col.classList.add("active");
+          band.setAttribute("x", L + i * step); band.setAttribute("visibility", "visible");
+        }, () => {
+          svgEl.classList.remove("hovering"); col.classList.remove("active"); band.setAttribute("visibility", "hidden");
+        });
+        svgEl.append(col);
+        if (i % labelEvery === 0) svgEl.append(svg("text", { x: x + bw / 2, y: H - 7, "text-anchor": "middle" }, columnLabel(b.unit, t)));
       });
-      // A full-height hit area so short columns are easy to hover.
-      const hit = svg("rect", { class: "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
-      col.append(hit);
-      hover(hit, () => {
-        const rows = series.map((s) => ({ name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
-        return tipRows(bucketTitle(b.unit, t), [
-          { name: "Total", value: fmt(totals[i]), strong: true },
-          ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]) })),
-        ], rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played");
-      }, () => {
-        root.classList.add("hovering"); col.classList.add("active");
-        band.setAttribute("x", L + i * step); band.setAttribute("visibility", "visible");
-      }, () => {
-        root.classList.remove("hovering"); col.classList.remove("active"); band.setAttribute("visibility", "hidden");
-      });
-      cols.push(col);
-      root.append(col);
-      if (i % labelEvery === 0) root.append(svg("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" }, columnLabel(b.unit, t)));
-    });
-    const focus = (si) => {
-      root.classList.toggle("focusing", si >= 0);
-      for (const r of root.querySelectorAll("rect[data-s]")) r.classList.toggle("on", Number(r.dataset.s) === si);
+      if (root) hideTip();
+      root = svgEl;
+      wrap.replaceChildren(root);
+      applyFocus();
     };
-    return [el("div", { class: "chart" }, root), legend(series, focus)];
+    const applyFocus = () => {
+      if (!root) return;
+      root.classList.toggle("focusing", focused >= 0);
+      for (const r of root.querySelectorAll("rect[data-s]")) r.classList.toggle("on", Number(r.dataset.s) === focused);
+    };
+    const focus = (si) => { focused = si; applyFocus(); };
+    draw(lastChartWidth);
+    if (typeof ResizeObserver === "function") {
+      let raf = 0;
+      const ro = new ResizeObserver((entries) => {
+        if (!wrap.isConnected) { ro.disconnect(); return; }
+        const w = entries[0].contentRect.width;
+        if (!w) return;
+        lastChartWidth = w;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => draw(w));
+      });
+      ro.observe(wrap);
+    }
+    return [wrap, legend(series, focus)];
   }
 
   // donut shows shares of a whole; slices are [{name, value, color, sub}].

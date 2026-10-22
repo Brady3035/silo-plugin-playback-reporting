@@ -15,6 +15,8 @@
   --p0: #3d63dd; --p1: #12a594; --p2: #e5484d; --p3: #f5a524; --p4: #8e4ec6; --p5: #0091ff; --p6: #d6409f; --p7: #46a758; --p8: #e54666; --p9: #00a2c7; --p10: #978365; --p11: #6e56cf;
   --tip-bg: #16181d; --tip-text: #f3f4f6; --tip-muted: #a3a9b6;
   --radius: 12px;
+  /* Side padding that grows on very wide screens so content stays centered at a readable width. */
+  --gutter: max(24px, calc((100vw - 1760px) / 2));
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -33,7 +35,7 @@
 body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.45; }
 h1 { font-size: 20px; margin: 0; }
 h2 { font-size: 15px; margin: 0 0 12px; }
-.top { padding: 14px 24px 10px; }
+.top { padding: 14px var(--gutter) 10px; }
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; font-size: 13px;
   margin: 0 0 6px -6px; padding: 4px 8px 4px 4px; border-radius: 8px; }
 .back:hover { color: var(--text); background: var(--accent-soft); }
@@ -42,13 +44,13 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .status { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 .status.error { color: var(--danger); }
 
-.tabs { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs { display: flex; gap: 4px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); overflow-x: auto; }
 .tabs button {
   font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
   padding: 10px 12px; cursor: pointer; white-space: nowrap;
 }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-main { padding: 16px 24px 40px; }
+main { padding: 16px var(--gutter) 40px; }
 .stack { display: grid; gap: 16px; min-width: 0; }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end; }
@@ -86,8 +88,8 @@ select:disabled { opacity: .6; }
 .tile .sub { font-size: 12px; color: var(--muted); }
 
 .chart { width: 100%; overflow: hidden; }
-.chart svg { display: block; width: 100%; height: auto; }
-.chart text { fill: var(--muted); font-size: 11px; }
+.chart svg { display: block; max-width: 100%; }
+.chart text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chart .grid line { stroke: var(--line); }
 .chart .col:hover rect:not([fill="transparent"]) { opacity: .85; }
 .legend, .donut-keys { list-style: none; padding: 0; margin: 10px 0 0; }
@@ -131,7 +133,7 @@ button.small:disabled { opacity: .5; cursor: default; }
 .range-note { margin: 0; }
 
 .heat { display: grid; grid-template-columns: 34px repeat(24, minmax(8px, 1fr)); gap: 3px; font-size: 11px; color: var(--muted); }
-.heat .cell { aspect-ratio: 1; border-radius: 3px; background: var(--heat-0); }
+.heat .cell { aspect-ratio: 1; max-height: 30px; border-radius: 3px; background: var(--heat-0); }
 .heat .cell[style] { background: color-mix(in srgb, var(--accent) calc(var(--a) * 100%), var(--heat-0)); }
 .heat .hour { text-align: center; }
 
@@ -141,9 +143,10 @@ button.small:disabled { opacity: .5; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 .setup { max-width: 640px; }
 @media (max-width: 600px) {
-  .top { padding: 16px 16px 8px; }
+  :root { --gutter: 16px; }
+  .top { padding: 16px var(--gutter) 8px; }
   .tabs { padding: 0 8px; }
-  main { padding: 12px 16px 32px; }
+  main { padding: 12px var(--gutter) 32px; }
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .toolbar { gap: 10px 12px; }
   .seg { flex-wrap: wrap; }
@@ -304,7 +307,7 @@ button.conn[data-state="fail"] { border-color: var(--danger); color: var(--dange
 button.conn[data-state="fail"] .conn-dot { background: var(--danger); }
 button.conn[data-state="checking"] .conn-dot { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
-.banner { margin: 12px 24px 0; padding: 10px 14px; border: 1px solid var(--danger); border-radius: 10px; font-size: 13px;
+.banner { margin: 12px var(--gutter) 0; padding: 10px 14px; border: 1px solid var(--danger); border-radius: 10px; font-size: 13px;
   background: color-mix(in srgb, var(--danger) 8%, var(--panel)); color: var(--text); }
 .banner button.link { margin: 0 0 0 6px; padding: 0; }
 .check-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
@@ -318,7 +321,7 @@ button.conn[data-state="checking"] .conn-dot { animation: pulse 1.2s ease-in-out
 .check-steps .s-detail { grid-column: 2; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .check-steps .fail .s-detail { color: var(--text); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-@media (max-width: 600px) { .banner { margin: 10px 16px 0; } }
+@media (max-width: 600px) { .banner { margin: 10px var(--gutter) 0; } }
 @media (prefers-reduced-motion: reduce) { button.conn[data-state="checking"] .conn-dot { animation: none; } }
 
 .bar.pickable { cursor: pointer; }
