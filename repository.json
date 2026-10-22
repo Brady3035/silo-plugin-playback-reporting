@@ -1,0 +1,256 @@
+{
+  "plugins": [
+    {
+      "manifest": {
+        "plugin_id": "community.playback-reporting",
+        "version": "0.1.0",
+        "silo_api_version": "v1",
+        "supported_platforms": [
+          {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          {
+            "os": "darwin",
+            "arch": "arm64"
+          }
+        ],
+        "capabilities": [
+          {
+            "type": "http_routes.v1",
+            "id": "reports",
+            "display_name": "Playback Reporting pages",
+            "description": "Serves the Playback Reporting admin page and its data."
+          }
+        ],
+        "global_config_schema": [
+          {
+            "key": "connection",
+            "title": "Silo connection",
+            "description": "How the plugin reads this server's playback history. Create the key under Settings → API keys, on an admin account, with no scopes.",
+            "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\",\"writeOnly\":true,\"maxLength\":512},\"base_url\":{\"type\":\"string\",\"maxLength\":2048}},\"additionalProperties\":false}",
+            "required": true,
+            "admin_form": {
+              "fields": [
+                {
+                  "key": "api_key",
+                  "label": "Admin API key",
+                  "description": "Starts with sa_. Stored encrypted by Silo and only sent to this server.",
+                  "control": 3,
+                  "placeholder": "sa_…",
+                  "required": true,
+                  "secret": true
+                },
+                {
+                  "key": "base_url",
+                  "label": "Server address (optional)",
+                  "description": "Leave empty to reach Silo directly inside its own process. Set it only if the plugin runs somewhere that cannot, for example http://silo:8080.",
+                  "control": 1,
+                  "placeholder": "Empty: this server",
+                  "validation": {
+                    "max_length": 2048
+                  }
+                }
+              ],
+              "submit_label": "Save connection"
+            }
+          },
+          {
+            "key": "reports",
+            "title": "Report filters",
+            "description": "Plays the reports leave out. Silo's own history is not changed.",
+            "json_schema": "{\"type\": \"object\", \"properties\": {\"min_play_seconds\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 86400}, \"ignored\": {\"type\": \"string\", \"maxLength\": 20000}}, \"additionalProperties\": false}",
+            "admin_form": {
+              "fields": [
+                {
+                  "key": "min_play_seconds",
+                  "label": "Hide plays shorter than (seconds)",
+                  "description": "Leave out plays watched for less than this, such as a few seconds of a trailer or an accidental start. 0 shows every play.",
+                  "control": 4,
+                  "default_value": 0,
+                  "validation": {
+                    "has_min": true,
+                    "has_max": true,
+                    "max": 86400
+                  }
+                },
+                {
+                  "key": "ignored",
+                  "label": "Ignore list",
+                  "description": "One per line. A username leaves out all of that account's plays; username/profile leaves out one profile, for example kids/Guest.",
+                  "control": 2,
+                  "placeholder": "testuser\nlaura/Guest",
+                  "rows": 5,
+                  "validation": {
+                    "max_length": 20000
+                  }
+                }
+              ],
+              "submit_label": "Save filters"
+            }
+          },
+          {
+            "key": "colors",
+            "title": "Chart colors",
+            "description": "Colors the report charts use. Leave a field empty for its default.",
+            "json_schema": "{\"type\": \"object\", \"properties\": {\"direct_play\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"direct_stream\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"transcode\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"movies\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"tv\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"audiobooks\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}$\"}, \"palette\": {\"type\": \"string\", \"maxLength\": 200, \"pattern\": \"^#[0-9a-fA-F]{6}(\\\\s*,\\\\s*#[0-9a-fA-F]{6}){0,15}$\"}}, \"additionalProperties\": false}",
+            "admin_form": {
+              "fields": [
+                {
+                  "key": "direct_play",
+                  "label": "Direct Play",
+                  "description": "A hex color such as #12a594.",
+                  "control": 1,
+                  "placeholder": "#12a594",
+                  "default_value": "#12a594",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "direct_stream",
+                  "label": "Remux (direct stream)",
+                  "description": "A hex color such as #3d63dd.",
+                  "control": 1,
+                  "placeholder": "#3d63dd",
+                  "default_value": "#3d63dd",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "transcode",
+                  "label": "Transcode",
+                  "description": "A hex color such as #e5484d.",
+                  "control": 1,
+                  "placeholder": "#e5484d",
+                  "default_value": "#e5484d",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "movies",
+                  "label": "Movies",
+                  "description": "A hex color such as #3d63dd.",
+                  "control": 1,
+                  "placeholder": "#3d63dd",
+                  "default_value": "#3d63dd",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "tv",
+                  "label": "TV shows",
+                  "description": "A hex color such as #8e4ec6.",
+                  "control": 1,
+                  "placeholder": "#8e4ec6",
+                  "default_value": "#8e4ec6",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "audiobooks",
+                  "label": "Audiobooks",
+                  "description": "A hex color such as #f5a524.",
+                  "control": 1,
+                  "placeholder": "#f5a524",
+                  "default_value": "#f5a524",
+                  "validation": {
+                    "max_length": 200
+                  }
+                },
+                {
+                  "key": "palette",
+                  "label": "User colors",
+                  "description": "Colors for users in the activity chart, in order, separated by commas. Up to 16.",
+                  "control": 1,
+                  "placeholder": "#3d63dd,#12a594,#e5484d,#f5a524,#8e4ec6,#0091ff,#d6409f,#46a758",
+                  "default_value": "#3d63dd,#12a594,#e5484d,#f5a524,#8e4ec6,#0091ff,#d6409f,#46a758",
+                  "validation": {
+                    "max_length": 200
+                  }
+                }
+              ],
+              "submit_label": "Save colors"
+            }
+          },
+          {
+            "key": "features",
+            "title": "Optional reports",
+            "description": "Extra data the plugin can collect beyond Silo's playback history.",
+            "json_schema": "{\"type\":\"object\",\"properties\":{\"track_clients\":{\"type\":\"boolean\",\"default\":false}},\"additionalProperties\":false}",
+            "admin_form": {
+              "fields": [
+                {
+                  "key": "track_clients",
+                  "label": "Track clients",
+                  "description": "Watch live sessions every 15 seconds and remember each play's client app and whether it was local or remote. Covers plays that start after it is turned on; very short plays can be missed.",
+                  "control": 5,
+                  "default_value": false
+                }
+              ],
+              "submit_label": "Save"
+            }
+          }
+        ],
+        "http_routes": [
+          {
+            "id": "page",
+            "method": "GET",
+            "path": "/",
+            "access": "admin",
+            "navigable": true,
+            "navigation_label": "Playback Reporting",
+            "navigation_kind": "admin"
+          },
+          {
+            "id": "data",
+            "method": "GET",
+            "path": "/data",
+            "access": "admin"
+          },
+          {
+            "id": "assets",
+            "method": "GET",
+            "path": "/assets/*",
+            "access": "admin"
+          }
+        ],
+        "category": "tools",
+        "presentation": {
+          "display_name": "Playback Reporting",
+          "summary": "Reports on what your users watch: activity over time, per-user sessions and stream types, and a breakdown of movies, shows and audiobooks by plays, time or smart plays.",
+          "description_markdown": "Playback Reporting adds a **Playback Reporting** page to the admin menu. It reads Silo's own playback history, so it needs no database of its own and shows plays recorded before it was installed.\n\n- **Activity**: a bar graph of watch time, plays or smart plays per day, week or month, stacked by user (or by profile), media type or stream type, with a weekday-and-hour heatmap.\n- **Users**: pick a user or profile to see their total watch time, movies, episodes and audiobooks, how they stream (Direct Play, Remux, Transcode), and every playback session.\n- **Breakdown**: top movies, TV shows and audiobooks by plays, time, or smart plays.\n- **History**: every play in a date range, with CSV export.\n\n**Smart plays** divide watch time by the length of the movie, episode or book, so two half-watched episodes count as one episode watched.\n\nWatch time is the time actually watched (Silo's measured watch time). Plays recorded before Silo measured watch time use an estimate and are marked with ≈.\n\nSettings let you hide plays shorter than a number of seconds, ignore accounts or profiles, and change the chart colors. These only change the reports; Silo's history is untouched.\n\nAudiobooks appear when they are played in Silo's own apps. Listening in Audiobookshelf apps is not part of Silo's playback history.\n\nOptionally, the plugin can also record each play's client and whether it was local or remote, by watching live sessions. That setting is off by default.",
+          "setup_markdown": "1. In **Settings → API keys**, create a key on an **admin** account with no scopes. The plugin reads admin playback history, which no narrower scope covers yet, so the key can do anything that admin can. Keep it private.\n2. Open this plugin's settings, paste the key under **Silo connection**, and save.\n3. Open **Playback Reporting** from the admin menu. The first load can take a few seconds on a large history.\n4. Optional: turn on **Track clients** to also report which apps and networks plays came from. It only covers plays that start after you turn it on.",
+          "homepage_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
+          "source_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
+          "publisher_name": "Brady3035",
+          "license_spdx": "MIT"
+        }
+      },
+      "repo_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
+      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.1.0/checksums.txt",
+      "binaries": {
+        "darwin/arm64": {
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.1.0/plugin-darwin-arm64",
+          "checksum": "71a7ed8754bf043967c668060c8858a043754641788ee8200c6be406d4ad8f4e"
+        },
+        "linux/amd64": {
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.1.0/plugin-linux-amd64",
+          "checksum": "1ab36a43c86e8fe21df90d3051c33b2bd471f7aaf169bf6d207e08b27f64e44b"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.1.0/plugin-linux-arm64",
+          "checksum": "d27f2143d28749d93c19b54bb467bc1885fba860b9abbc54e220ba1aa56c43e9"
+        }
+      }
+    }
+  ]
+}
