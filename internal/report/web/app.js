@@ -231,14 +231,16 @@
   function selectControl(label, tab, key, options, fallback, onchange) {
     const s = el("select", {}, options.map(([v, t]) => el("option", { value: v, text: t })));
     const cur = setting(tab, key, fallback);
-    s.value = options.some(([v]) => v === cur) ? cur : fallback;
+    if (!options.some(([v]) => v === cur)) setSetting(tab, key, fallback);
+    s.value = setting(tab, key, fallback);
     s.addEventListener("change", () => { setSetting(tab, key, s.value); onchange(); });
     return el("label", { class: "field" }, el("span", { text: label }), s);
   }
 
   function segmented(label, tab, key, options, fallback, onchange) {
     let cur = setting(tab, key, fallback);
-    if (!options.some(([v]) => v === cur)) cur = fallback;
+    // A saved choice that is no longer offered falls back to the default.
+    if (!options.some(([v]) => v === cur)) { cur = fallback; setSetting(tab, key, fallback); }
     const group = el("div", { class: "seg", role: "radiogroup", "aria-label": label });
     const buttons = options.map(([v, t]) => el("button", { type: "button", role: "radio", "aria-checked": String(v === cur), "data-v": v, text: t }));
     group.append(...buttons);
@@ -550,7 +552,10 @@
     return el("section", { class: "panel" }, head, body);
   }
 
-  const CAT_FILTER = [["all", "All"], ["movies", "Movies"], ["tv", "TV shows"], ["audiobooks", "Audiobooks"]];
+  const MEASURE_OPTIONS = [["time", "Time"], ["smart", "Smart plays"], ["plays", "Plays"]];
+  // Audiobooks only appear where there has been audiobook activity.
+  const hasAudiobooks = () => state.plays.some((p) => p.cat === "audiobooks");
+  const catFilter = () => [["all", "All"], ["movies", "Movies"], ["tv", "TV shows"], ...(hasAudiobooks() ? [["audiobooks", "Audiobooks"]] : [])];
   const byCat = (plays, c) => (c === "all" ? plays : plays.filter((p) => p.cat === c));
 
   // ---------- Activity tab ----------
@@ -589,8 +594,8 @@
       content.replaceChildren(
         el("div", { class: "tiles" },
           tile("Watch time", hours(sum(plays, (p) => p.watched)), plays.some((p) => p.estimated) ? "≈ includes estimated older plays" : null),
-          tile("Plays", num(plays.length)),
           tile("Smart plays", dec(sum(plays, (p) => p.smart)), "watch time ÷ length"),
+          tile("Plays", num(plays.length)),
           tile(split ? "Active profiles" : "Active users", num(people.length)),
           tile("Transcoded", pct(plays.filter((p) => p.stream === "transcode").length, plays.length), "of plays")),
         panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what)),
@@ -601,8 +606,8 @@
     };
     view.append(toolbar(
       rangeControl(T, D, draw),
-      segmented("Show", T, "cat", CAT_FILTER, "all", draw),
-      segmented("Measure", T, "measure", [["time", "Time"], ["plays", "Plays"], ["smart", "Smart plays"]], "time", draw),
+      segmented("Show", T, "cat", catFilter(), "all", draw),
+      segmented("Measure", T, "measure", MEASURE_OPTIONS, "time", draw),
       selectControl("Stack by", T, "stack", [["user", "User"], ["cat", "Media type"], ["stream", "Stream type"]], "user", draw),
       checkbox("Separate profiles", T, "profiles", draw)), content);
     draw();
@@ -676,11 +681,12 @@
         rangeNote ? el("p", { class: "note range-note", text: rangeNote }) : null,
         el("div", { class: "tiles" },
           tile("Total watch time", hours(total), plays.some((p) => p.estimated) ? "≈ includes estimated older plays" : `${num(plays.length)} plays`),
-          catTile(cats[0], "movies watched"), catTile(cats[1], "episodes watched"), catTile(cats[2], "books listened"),
+          catTile(cats[0], "movies watched"), catTile(cats[1], "episodes watched"),
+          cats[2].items.length ? catTile(cats[2], "books listened") : null,
           cats[3].items.length ? catTile(cats[3], "plays") : null),
         el("div", { class: "grid2" },
           panel("How they stream", donut(streams, pct(streams[0].value, total), "direct play", hours), el("p", { class: "note", text: "Share of watch time. Remux copies the video into a new container without re-encoding it." })),
-          panel("What they watch", donut(cats.filter((x) => x.items.length || x.c !== "other").map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
+          panel("What they watch", donut(cats.filter((x) => x.items.length || x.c === "movies" || x.c === "tv").map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
         sessions(plays, T)].filter(Boolean));
     };
     userSel.addEventListener("change", () => { setSetting(T, "user", userSel.value); setSetting(T, "profile", ""); state.page.users = 0; fillProfiles(); draw(); });
@@ -744,9 +750,9 @@
       const smartUnit = { movies: "× watched", tv: " episodes", audiobooks: "× listened", other: "×" };
       const valueText = (c) => (g) => (measure === "smart" ? dec(g.value) + smartUnit[c] : fmt(g.value));
       const subText = (c) => (g) => [
-        measure !== "plays" ? `${num(g.plays)} plays` : null,
         measure !== "time" ? hours(g.time) : null,
         measure !== "smart" ? `${dec(g.smart)}${smartUnit[c]}` : null,
+        measure !== "plays" ? `${num(g.plays)} plays` : null,
         `${num(viewers(g))} ${viewers(g) === 1 ? "user" : "users"}`,
       ].filter(Boolean).join(" · ");
       const section = (c, title, key, label, note) => {
@@ -773,9 +779,8 @@
       const sections = [
         section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
         section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
-        section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title,
-          "No audiobook plays in this range. Silo's playback history covers audiobooks played in Silo's own apps; Audiobookshelf-app listening isn't recorded there."),
       ];
+      if (plays.some((p) => p.cat === "audiobooks")) sections.push(section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title));
       if (plays.some((p) => p.cat === "other")) sections.push(section("other", "Other", (p) => p.itemId, (g) => g.items[0].title));
       content.replaceChildren(...[
         measure === "smart" ? el("p", { class: "note range-note", text: "Smart plays divide watch time by the length of the movie, episode or book: two half-watched episodes count as one episode watched." }) : null,
@@ -783,7 +788,7 @@
     };
     view.append(toolbar(
       rangeControl(T, D, draw),
-      segmented("View", T, "measure", [["plays", "Plays"], ["time", "Time"], ["smart", "Smart plays"]], "time", draw),
+      segmented("View", T, "measure", MEASURE_OPTIONS, "time", draw),
       segmented("Chart", T, "chart", [["list", "List"], ["pie", "Pie"]], "list", draw),
       selectControl("Show", T, "limit", [["5", "Top 5"], ["10", "Top 10"], ["20", "Top 20"], ["50", "Top 50"], ["all", "All"]], "10", draw),
       selectControl("User", T, "user", userOpts, "", draw)), content);
@@ -818,7 +823,7 @@
       state.page.history = 0;
       content.replaceChildren(sessions(byCat(inRange(state.plays, bounds(T, D)), setting(T, "cat", "all")), "history"));
     };
-    view.append(toolbar(rangeControl(T, D, draw), segmented("Show", T, "cat", CAT_FILTER, "all", draw)), content);
+    view.append(toolbar(rangeControl(T, D, draw), segmented("Show", T, "cat", catFilter(), "all", draw)), content);
     draw();
   }
 
