@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "community.playback-reporting",
-        "version": "0.2.3",
+        "version": "0.2.4",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -39,7 +39,7 @@
                 {
                   "key": "api_key",
                   "label": "Admin API key",
-                  "description": "Starts with sa_. Stored encrypted by Silo and only sent to this server.",
+                  "description": "Starts with sa_. Stored encrypted by Silo and only sent to this server. After saving, the report page's connection check says whether the key works.",
                   "control": 3,
                   "placeholder": "sa_…",
                   "required": true,
@@ -103,7 +103,7 @@
                 {
                   "key": "track_clients",
                   "label": "Track clients",
-                  "description": "Watch live sessions every 15 seconds and remember each play's client app and whether it was local or remote. Covers plays that start after it is turned on; very short plays can be missed.",
+                  "description": "Watch live sessions every 15 seconds and remember each play's client app, whether it was local or remote, and how it was really played. Stored in Silo, about 2 million plays' worth. Covers plays that start after it is turned on; plays shorter than about 15 seconds can be missed.",
                   "control": 5,
                   "default_value": false
                 }
@@ -126,6 +126,12 @@
             "id": "data",
             "method": "GET",
             "path": "/data",
+            "access": "admin"
+          },
+          {
+            "id": "check",
+            "method": "GET",
+            "path": "/check",
             "access": "admin"
           },
           {
@@ -154,19 +160,19 @@
         }
       },
       "repo_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
-      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.3/checksums.txt",
+      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.4/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.3/plugin-darwin-arm64",
-          "checksum": "bcfbb4ff51aa820bfa0f5da94b74c369d6082676ec2910753ec06a673073aae0"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.4/plugin-darwin-arm64",
+          "checksum": "c150cad054a8ca5d39f709e4599b3d8715878baa699f05dabc70cfd060aedabb"
         },
         "linux/amd64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.3/plugin-linux-amd64",
-          "checksum": "6d8fb2096f23a1c83bd08f1f553144d08caf3f688d585405733a1e9e5547e9c9"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.4/plugin-linux-amd64",
+          "checksum": "1456aded9c52a1e42a5650d001c2faf043e076b9792d7456e5af578369b63b11"
         },
         "linux/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.3/plugin-linux-arm64",
-          "checksum": "43c77342507436f3fb4d14448471cf6f026979d4ef1aec8927276d1d0527e128"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.4/plugin-linux-arm64",
+          "checksum": "fef93d31d8fae7e0c344bc6599933da3fb509a9ab0d62ef2d404aa03654da776"
         }
       }
     }
