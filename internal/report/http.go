@@ -75,7 +75,7 @@ func (h *Handler) Handle(ctx context.Context, req *pluginv1.HandleHTTPRequest) (
 	if !strings.EqualFold(header(req, "X-Silo-User-Role"), "admin") {
 		return text(http.StatusForbidden, "Playback Reporting is for administrators."), nil
 	}
-	if req.GetPath() == "/settings/colors" {
+	if req.GetPath() == "/settings" {
 		return h.handleColors(ctx, req), nil
 	}
 	if req.GetMethod() != http.MethodGet && req.GetMethod() != http.MethodHead {
@@ -158,7 +158,7 @@ func (h *Handler) data(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResp
 	return jsonResponse(http.StatusOK, snap.chunks[index])
 }
 
-// handleColors saves the chart colors picked on the page (POST, JSON). The
+// handleColors saves the settings picked under Customize (POST, JSON). The
 // JSON content type keeps other sites from posting here: a cross-site form
 // can't send it without a preflight, which this route doesn't answer, and
 // the host's launch cookie is SameSite=Lax.
@@ -167,18 +167,18 @@ func (h *Handler) handleColors(ctx context.Context, req *pluginv1.HandleHTTPRequ
 		return text(http.StatusMethodNotAllowed, "method not allowed")
 	}
 	if ct, _, _ := strings.Cut(header(req, "Content-Type"), ";"); !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
-		return jsonResponse(http.StatusUnsupportedMediaType, []byte(`{"error":"Send colors as JSON."}`))
+		return jsonResponse(http.StatusUnsupportedMediaType, []byte(`{"error":"Send settings as JSON."}`))
 	}
 	if len(req.GetBody()) > 16<<10 {
 		return jsonResponse(http.StatusRequestEntityTooLarge, []byte(`{"error":"Too many colors."}`))
 	}
 	var in ColorSettings
 	if err := json.Unmarshal(req.GetBody(), &in); err != nil {
-		return jsonResponse(http.StatusBadRequest, []byte(`{"error":"Those colors could not be read."}`))
+		return jsonResponse(http.StatusBadRequest, []byte(`{"error":"Those settings could not be read."}`))
 	}
 	saved, err := h.saveColors(ctx, in)
 	if err != nil {
-		return jsonResponse(http.StatusInternalServerError, []byte(`{"error":"Silo could not save the colors. Try again."}`))
+		return jsonResponse(http.StatusInternalServerError, []byte(`{"error":"Silo could not save the settings. Try again."}`))
 	}
 	body, _ := json.Marshal(saved)
 	return jsonResponse(http.StatusOK, body)

@@ -7,11 +7,13 @@ import (
 	"time"
 )
 
-// ColorSettings are the chart colors an admin picks on the report page.
-// Missing roles and an empty palette mean the page's defaults.
+// ColorSettings are the report page's own settings, picked under Customize:
+// chart colors and whether audiobooks are part of the reports. Missing
+// roles and an empty palette mean the page's defaults.
 type ColorSettings struct {
-	Colors  map[string]string `json:"colors"`
-	Palette []string          `json:"palette"`
+	Colors         map[string]string `json:"colors"`
+	Palette        []string          `json:"palette"`
+	ShowAudiobooks bool              `json:"show_audiobooks"`
 }
 
 const (
@@ -22,7 +24,7 @@ const (
 // clean keeps known roles with valid #rrggbb values and up to 16 palette
 // colors, lowercased.
 func (c ColorSettings) clean() ColorSettings {
-	out := ColorSettings{Colors: map[string]string{}, Palette: []string{}}
+	out := ColorSettings{Colors: map[string]string{}, Palette: []string{}, ShowAudiobooks: c.ShowAudiobooks}
 	for _, k := range ColorKeys {
 		if v := strings.ToLower(strings.TrimSpace(c.Colors[k])); hexColor.MatchString(v) {
 			out.Colors[k] = v

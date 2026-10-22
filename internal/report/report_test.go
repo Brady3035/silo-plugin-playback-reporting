@@ -353,7 +353,7 @@ func TestColorsSaveAndLoad(t *testing.T) {
 	}
 
 	post := func(body, contentType string) *pluginv1.HandleHTTPResponse {
-		req := request("/settings/colors", "admin", nil)
+		req := request("/settings", "admin", nil)
 		req.Method = "POST"
 		req.Body = []byte(body)
 		req.Headers["Content-Type"] = contentType
@@ -363,27 +363,27 @@ func TestColorsSaveAndLoad(t *testing.T) {
 	if r := post(`{"colors":{"transcode":"#ff0000"}}`, "text/plain"); r.GetStatusCode() != 415 {
 		t.Fatalf("non-JSON post: %d", r.GetStatusCode())
 	}
-	r := post(`{"colors":{"transcode":"#FF0000","movies":"blue","bogus":"#000000"},"palette":["#111111","x","#222222"]}`, "application/json; charset=utf-8")
+	r := post(`{"colors":{"transcode":"#FF0000","movies":"blue","bogus":"#000000"},"palette":["#111111","x","#222222"],"show_audiobooks":true}`, "application/json; charset=utf-8")
 	if r.GetStatusCode() != 200 {
 		t.Fatalf("save: %d %s", r.GetStatusCode(), r.GetBody())
 	}
 	var saved ColorSettings
 	_ = json.Unmarshal(r.GetBody(), &saved)
-	if len(saved.Colors) != 1 || saved.Colors["transcode"] != "#ff0000" || len(saved.Palette) != 2 {
+	if len(saved.Colors) != 1 || saved.Colors["transcode"] != "#ff0000" || len(saved.Palette) != 2 || !saved.ShowAudiobooks {
 		t.Fatalf("saved %+v", saved)
 	}
 
 	// A new process reads them back from the plugin's state.
 	again := &Handler{Store: NewStore(), State: state}
 	again.Configure(nil, nil, "")
-	if got := again.colors(t.Context()); got.Colors["transcode"] != "#ff0000" || got.Colors["tv"] != "" || len(got.Palette) != 2 {
+	if got := again.colors(t.Context()); got.Colors["transcode"] != "#ff0000" || got.Colors["tv"] != "" || len(got.Palette) != 2 || !got.ShowAudiobooks {
 		t.Fatalf("reloaded %+v", got)
 	}
 	page, _ := again.Handle(t.Context(), request("/", "admin", nil))
 	if !strings.Contains(string(page.GetBody()), `"transcode":"#ff0000"`) {
 		t.Fatalf("page lacks saved colors")
 	}
-	get := request("/settings/colors", "admin", nil)
+	get := request("/settings", "admin", nil)
 	if r, _ := again.Handle(t.Context(), get); r.GetStatusCode() != 405 {
 		t.Fatalf("GET colors: %d", r.GetStatusCode())
 	}

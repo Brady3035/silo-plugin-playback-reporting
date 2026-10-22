@@ -109,9 +109,9 @@
   function readSavedColors() {
     try {
       const raw = JSON.parse(($("saved-colors") || {}).textContent || "{}");
-      return { colors: raw.colors || {}, palette: Array.isArray(raw.palette) ? raw.palette : [] };
+      return { colors: raw.colors || {}, palette: Array.isArray(raw.palette) ? raw.palette : [], show_audiobooks: raw.show_audiobooks === true };
     } catch (_) {
-      return { colors: {}, palette: [] };
+      return { colors: {}, palette: [], show_audiobooks: false };
     }
   }
   // fullColors fills a saved set with defaults so every role has a value.
@@ -119,7 +119,7 @@
     const colors = {};
     for (const k of Object.keys(ROLE_DEFAULT)) colors[k] = HEX.test(c.colors[k] || "") ? c.colors[k].toLowerCase() : ROLE_DEFAULT[k];
     const palette = (c.palette || []).filter((x) => HEX.test(x)).slice(0, MAX_PALETTE);
-    return { colors, palette: palette.length ? palette : DEFAULT_PALETTE.slice() };
+    return { colors, palette: palette.length ? palette : DEFAULT_PALETTE.slice(), show_audiobooks: c.show_audiobooks === true };
   }
   function applyColors(c) {
     const root = document.documentElement.style;
@@ -194,7 +194,8 @@
       const batch = rest.splice(0, 3).map((i) => fetchJSON(`data?snapshot=${encodeURIComponent(first.snapshot)}&chunk=${i}`));
       chunks.push(...(await Promise.all(batch)));
     }
-    state.plays = chunks.flatMap(decode).sort((a, b) => b.ended - a.ended);
+    state.allPlays = chunks.flatMap(decode).sort((a, b) => b.ended - a.ended);
+    setAudiobooks(state.colors.show_audiobooks);
     state.features = first.features || { clients: false };
     state.status = first.status;
   }
@@ -554,8 +555,16 @@
 
   const MEASURE_OPTIONS = [["time", "Time"], ["smart", "Smart plays"], ["plays", "Plays"]];
   // Audiobooks only appear where there has been audiobook activity.
-  const hasAudiobooks = () => state.plays.some((p) => p.cat === "audiobooks");
-  const catFilter = () => [["all", "All"], ["movies", "Movies"], ["tv", "TV shows"], ...(hasAudiobooks() ? [["audiobooks", "Audiobooks"]] : [])];
+  // Audiobooks are part of the reports only when turned on under Customize;
+  // otherwise their plays are left out everywhere.
+  let showAudiobooks = false;
+  function setAudiobooks(on) {
+    showAudiobooks = on;
+    const all = state.allPlays || [];
+    state.plays = on ? all : all.filter((p) => p.cat !== "audiobooks");
+    if (state.status) showStatus();
+  }
+  const catFilter = () => [["all", "All"], ["movies", "Movies"], ["tv", "TV shows"], ...(showAudiobooks ? [["audiobooks", "Audiobooks"]] : [])];
   const byCat = (plays, c) => (c === "all" ? plays : plays.filter((p) => p.cat === c));
 
   // ---------- Activity tab ----------
@@ -682,11 +691,11 @@
         el("div", { class: "tiles" },
           tile("Total watch time", hours(total), plays.some((p) => p.estimated) ? "≈ includes estimated older plays" : `${num(plays.length)} plays`),
           catTile(cats[0], "movies watched"), catTile(cats[1], "episodes watched"),
-          cats[2].items.length ? catTile(cats[2], "books listened") : null,
+          showAudiobooks ? catTile(cats[2], "books listened") : null,
           cats[3].items.length ? catTile(cats[3], "plays") : null),
         el("div", { class: "grid2" },
           panel("How they stream", donut(streams, pct(streams[0].value, total), "direct play", hours), el("p", { class: "note", text: "Share of watch time. Remux copies the video into a new container without re-encoding it." })),
-          panel("What they watch", donut(cats.filter((x) => x.items.length || x.c === "movies" || x.c === "tv").map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
+          panel("What they watch", donut(cats.filter((x) => x.c === "movies" || x.c === "tv" || (x.c === "audiobooks" && showAudiobooks) || (x.c === "other" && x.items.length)).map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
         sessions(plays, T)].filter(Boolean));
     };
     userSel.addEventListener("change", () => { setSetting(T, "user", userSel.value); setSetting(T, "profile", ""); state.page.users = 0; fillProfiles(); draw(); });
@@ -780,7 +789,10 @@
         section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
         section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
       ];
-      if (plays.some((p) => p.cat === "audiobooks")) sections.push(section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title));
+      if (showAudiobooks) {
+        sections.push(section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title,
+          "No audiobook plays in this range. Silo's playback history covers audiobooks played in Silo's own apps; Audiobookshelf-app listening isn't recorded there."));
+      }
       if (plays.some((p) => p.cat === "other")) sections.push(section("other", "Other", (p) => p.itemId, (g) => g.items[0].title));
       content.replaceChildren(...[
         measure === "smart" ? el("p", { class: "note range-note", text: "Smart plays divide watch time by the length of the movie, episode or book: two half-watched episodes count as one episode watched." }) : null,
@@ -852,12 +864,13 @@
   }
   const copy = (c) => JSON.parse(JSON.stringify(c));
 
-  // openCustomize shows the color pickers. Changes preview live; Cancel
-  // returns to the colors the page had, Save stores them in the plugin.
+  // openCustomize shows the page settings: audiobooks and colors. Changes
+  // preview live; Cancel returns to what the page had, Save stores them in
+  // the plugin for everyone.
   function openCustomize(start, note) {
     const original = copy(state.colors);
     let work = copy(start || state.colors);
-    const preview = () => { applyColors(work); render(); };
+    const preview = () => { applyColors(work); setAudiobooks(work.show_audiobooks); render(); };
     const msg = el("p", { class: "dlg-msg" + (note ? " error" : ""), role: "status", "aria-live": "polite", text: note || "" });
 
     const picker = (value, label, onInput) => {
@@ -881,10 +894,16 @@
       addBtn.title = addBtn.disabled ? `Up to ${MAX_PALETTE} colors` : "Add color";
     };
     const drawBody = () => {
+      const toggle = el("input", { type: "checkbox", role: "switch", class: "switch" });
+      toggle.checked = work.show_audiobooks;
+      toggle.addEventListener("change", () => { work.show_audiobooks = toggle.checked; drawBody(); preview(); body.querySelector(".switch").focus(); });
       body.replaceChildren(
+        el("fieldset", { class: "colors" }, el("legend", { text: "Reports" }),
+          el("label", { class: "color-row" }, el("span", { class: "c-label" }, "Show audiobooks",
+            el("span", { class: "note block", text: "Adds audiobooks to the filters, the Users tab and Breakdown. When off, audiobook plays are left out of every report." })), toggle)),
         ...COLOR_ROLES.map(([group, roles]) => el("fieldset", { class: "colors" },
           el("legend", { text: group }),
-          roles.map(([k, label]) => el("label", { class: "color-row" },
+          roles.filter(([k]) => k !== "audiobooks" || work.show_audiobooks).map(([k, label]) => el("label", { class: "color-row" },
             el("span", { class: "c-label", text: label }),
             picker(work.colors[k], `${label} color`, (v) => { work.colors[k] = v; }))))),
         el("fieldset", { class: "colors" }, el("legend", { text: "User colors" }),
@@ -903,14 +922,14 @@
     drawBody();
 
     const close = (saved) => {
-      if (!saved) { state.colors = original; applyColors(original); render(); }
+      if (!saved) { state.colors = original; applyColors(original); setAudiobooks(original.show_audiobooks); render(); }
       dlg.close(); dlg.remove();
     };
     const saveBtn = el("button", { type: "button", class: "small primary", text: "Save" });
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true; msg.textContent = "Saving…"; msg.classList.remove("error");
       try {
-        const res = await fetch("settings/colors", { method: "POST", credentials: "same-origin",
+        const res = await fetch("settings", { method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(work) });
         if (res.status === 401 || res.status === 403) throw Object.assign(new Error("expired"), { expired: true });
         const saved = await res.json().catch(() => ({}));
@@ -918,26 +937,26 @@
         state.colors = fullColors(saved);
         remember(DRAFT_KEY, "");
         close(true);
-        applyColors(state.colors); render();
+        applyColors(state.colors); setAudiobooks(state.colors.show_audiobooks); render();
       } catch (err) {
         saveBtn.disabled = false;
         msg.classList.add("error");
         if (err.expired) {
           // Access to this page lasts five minutes; keep the picks for next time.
           remember(DRAFT_KEY, JSON.stringify(work));
-          msg.textContent = "Your access to this page expired, so the colors weren't saved. Open Playback Reporting again from the admin menu and your picks will be waiting.";
+          msg.textContent = "Your access to this page expired, so these settings weren't saved. Open Playback Reporting again from the admin menu and your picks will be waiting.";
         } else {
           msg.textContent = err.message || "Saving failed.";
         }
       }
     });
     const dlg = el("dialog", { class: "dlg", "aria-labelledby": "dlg-title" },
-      el("div", { class: "dlg-head" }, el("h2", { id: "dlg-title", text: "Customize colors" }),
+      el("div", { class: "dlg-head" }, el("h2", { id: "dlg-title", text: "Customize" }),
         el("button", { type: "button", class: "icon", "aria-label": "Close", onclick: () => close(false) }, "×")),
       body, msg,
       el("div", { class: "dlg-foot" },
-        el("button", { type: "button", class: "small link", text: "Reset to defaults",
-          onclick: () => { work = fullColors({ colors: {}, palette: [] }); drawBody(); preview(); } }),
+        el("button", { type: "button", class: "small link", text: "Reset colors",
+          onclick: () => { work = { ...fullColors({ colors: {}, palette: [] }), show_audiobooks: work.show_audiobooks }; drawBody(); preview(); } }),
         el("span", { class: "grow" }),
         el("button", { type: "button", class: "small", text: "Cancel", onclick: () => close(false) }),
         saveBtn));
@@ -952,7 +971,7 @@
     const raw = remember(DRAFT_KEY);
     if (!raw) return;
     try {
-      openCustomize(fullColors(JSON.parse(raw)), "These are the colors you picked before your access expired. Save to keep them.");
+      openCustomize(fullColors(JSON.parse(raw)), "These are the settings you picked before your access expired. Save to keep them.");
     } catch (_) { remember(DRAFT_KEY, ""); }
   }
 

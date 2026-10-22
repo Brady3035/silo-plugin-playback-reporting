@@ -23,9 +23,14 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 
 **Smart plays** = watch time ÷ length of the movie, episode or book. Two half-watched episodes count as one episode watched; a movie watched twice counts 2×.
 
-## Colors
+## Customize
 
-Select **Customize** at the top right of the report page to pick colors for Direct Play, Remux, Transcode, Movies, TV shows and Audiobooks, and the list of colors used for users and pie slices (add, change or remove up to 16). Changes preview live and are saved by the plugin for everyone who opens the report.
+Select **Customize** at the top right of the report page:
+
+- **Show audiobooks**: off by default. When on, audiobooks appear in the filters, the Users tab and Breakdown; when off, audiobook plays are left out of every report.
+- **Colors** for Direct Play, Remux, Transcode, Movies, TV shows and Audiobooks, and the list of colors used for users and pie slices (add, change or remove up to 16).
+
+Changes preview live and are saved by the plugin for everyone who opens the report.
 
 ## Settings (plugin settings page)
 
@@ -41,7 +46,7 @@ Filters and the ignore list only hide plays in the reports. Silo's history is ne
 
 ## Audiobooks
 
-Audiobooks appear when they're played in Silo's own apps (media type `audiobook`). Listening through Audiobookshelf apps goes through Silo's ABS-compatible API and is not written to the admin playback history, so it doesn't show here.
+Turn on **Show audiobooks** under Customize. Audiobooks appear when they're played in Silo's own apps (media type `audiobook`). Listening through Audiobookshelf apps goes through Silo's ABS-compatible API and is not written to the admin playback history, so it doesn't show here.
 
 ## Releasing
 

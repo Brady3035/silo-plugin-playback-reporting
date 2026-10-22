@@ -241,3 +241,13 @@ input[type="color"]::-moz-color-swatch { border: 0; border-radius: 5px; }
 @media (prefers-reduced-motion: reduce) {
   .donut .slice, .chart rect[data-s], .heat .cell { transition: none; }
 }
+
+/* Switch (Customize) */
+.note.block { display: block; margin: 2px 0 0; font-weight: 400; }
+input.switch { -webkit-appearance: none; appearance: none; flex: none; width: 38px; height: 22px; border-radius: 999px; margin: 0;
+  background: var(--line); position: relative; cursor: pointer; transition: background .15s; }
+input.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: transform .15s; }
+input.switch:checked { background: var(--accent); }
+input.switch:checked::after { transform: translateX(16px); }
+@media (prefers-reduced-motion: reduce) { input.switch, input.switch::after { transition: none; } }
