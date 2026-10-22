@@ -193,13 +193,6 @@ func (s *snapshots) current(store *Store, status Status, feat features, clients 
 	plays, feat.Hidden = opts.apply(plays)
 	if opts != nil {
 		feat.MinSeconds, feat.IgnoreRules = opts.MinSeconds, len(opts.Ignore)
-		feat.Colors, feat.Palette = opts.Colors, opts.Palette
-	}
-	if feat.Colors == nil {
-		feat.Colors = map[string]string{}
-	}
-	if feat.Palette == nil {
-		feat.Palette = []string{}
 	}
 	chunks, err := encodeChunks(id, plays, status, feat, clients, now)
 	if err != nil {

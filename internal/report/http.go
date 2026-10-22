@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"path"
@@ -37,6 +38,11 @@ type Handler struct {
 	// problem, when set, is shown instead of the reports (no API key).
 	problem string
 	options *Options
+
+	// State stores saved chart colors; nil in tests that don't need it.
+	State       StateStore
+	colorMu     sync.Mutex
+	savedColors *ColorSettings
 }
 
 // SetOptions sets the report settings (hidden plays, colors).
@@ -65,16 +71,19 @@ var _ pluginv1.HttpRoutesServer = (*Handler)(nil)
 // Handle answers one proxied request. The host already restricts every route
 // to administrators; the role header is checked again in case the plugin is
 // reached some other way.
-func (h *Handler) Handle(_ context.Context, req *pluginv1.HandleHTTPRequest) (*pluginv1.HandleHTTPResponse, error) {
-	if req.GetMethod() != http.MethodGet && req.GetMethod() != http.MethodHead {
-		return text(http.StatusMethodNotAllowed, "method not allowed"), nil
-	}
+func (h *Handler) Handle(ctx context.Context, req *pluginv1.HandleHTTPRequest) (*pluginv1.HandleHTTPResponse, error) {
 	if !strings.EqualFold(header(req, "X-Silo-User-Role"), "admin") {
 		return text(http.StatusForbidden, "Playback Reporting is for administrators."), nil
 	}
+	if req.GetPath() == "/settings/colors" {
+		return h.handleColors(ctx, req), nil
+	}
+	if req.GetMethod() != http.MethodGet && req.GetMethod() != http.MethodHead {
+		return text(http.StatusMethodNotAllowed, "method not allowed"), nil
+	}
 	switch p := req.GetPath(); {
 	case p == "/" || p == "":
-		return h.page(req), nil
+		return h.page(ctx, req), nil
 	case p == "/data":
 		return h.data(req), nil
 	case strings.HasPrefix(p, "/assets/"):
@@ -90,7 +99,7 @@ func (h *Handler) clock() time.Time {
 	return time.Now()
 }
 
-func (h *Handler) page(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
+func (h *Handler) page(ctx context.Context, req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
 	syncer, _, problem := h.parts()
 	if syncer != nil {
 		syncer.Kick()
@@ -105,6 +114,7 @@ func (h *Handler) page(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResp
 		"Version": assetVersion,
 		"Viewer":  header(req, "X-Silo-User-Name"),
 		"Problem": problem,
+		"Colors":  h.colors(ctx),
 	})
 	if err != nil {
 		return text(http.StatusInternalServerError, "page failed to render")
@@ -146,6 +156,32 @@ func (h *Handler) data(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResp
 		return jsonResponse(http.StatusNotFound, []byte(`{"error":"No such chunk."}`))
 	}
 	return jsonResponse(http.StatusOK, snap.chunks[index])
+}
+
+// handleColors saves the chart colors picked on the page (POST, JSON). The
+// JSON content type keeps other sites from posting here: a cross-site form
+// can't send it without a preflight, which this route doesn't answer, and
+// the host's launch cookie is SameSite=Lax.
+func (h *Handler) handleColors(ctx context.Context, req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
+	if req.GetMethod() != http.MethodPost {
+		return text(http.StatusMethodNotAllowed, "method not allowed")
+	}
+	if ct, _, _ := strings.Cut(header(req, "Content-Type"), ";"); !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
+		return jsonResponse(http.StatusUnsupportedMediaType, []byte(`{"error":"Send colors as JSON."}`))
+	}
+	if len(req.GetBody()) > 16<<10 {
+		return jsonResponse(http.StatusRequestEntityTooLarge, []byte(`{"error":"Too many colors."}`))
+	}
+	var in ColorSettings
+	if err := json.Unmarshal(req.GetBody(), &in); err != nil {
+		return jsonResponse(http.StatusBadRequest, []byte(`{"error":"Those colors could not be read."}`))
+	}
+	saved, err := h.saveColors(ctx, in)
+	if err != nil {
+		return jsonResponse(http.StatusInternalServerError, []byte(`{"error":"Silo could not save the colors. Try again."}`))
+	}
+	body, _ := json.Marshal(saved)
+	return jsonResponse(http.StatusOK, body)
 }
 
 func asset(name string) *pluginv1.HandleHTTPResponse {

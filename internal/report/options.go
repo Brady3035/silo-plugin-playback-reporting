@@ -13,8 +13,8 @@ type Options struct {
 	MinSeconds int
 	// Ignore hides whole accounts or single profiles.
 	Ignore []IgnoreRule
-	// Colors maps a chart role (direct_play, transcode, movies, ...) to a
-	// #rrggbb color; Palette colors users in order. Both are already valid.
+	// Colors and Palette come from the old settings form; colors saved on
+	// the report page replace them.
 	Colors  map[string]string
 	Palette []string
 }
@@ -111,5 +111,5 @@ func (o *Options) key() string {
 	if o == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d/%v/%v/%v", o.MinSeconds, o.Ignore, o.Colors, o.Palette)
+	return fmt.Sprintf("%d/%v", o.MinSeconds, o.Ignore)
 }

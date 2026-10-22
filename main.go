@@ -29,7 +29,7 @@ var manifestJSON []byte
 func main() {
 	// go-plugin forwards the plugin's stderr to the host log.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	a := &app{logger: logger, handler: &report.Handler{Store: report.NewStore()}}
+	a := &app{logger: logger, handler: &report.Handler{Store: report.NewStore(), State: hostState{}}}
 	sdkruntime.ServeManifestWithOptions(withPlatform(manifestJSON), version,
 		sdkruntime.CapabilityServers{HttpRoutes: a.handler},
 		sdkruntime.WithConfigure(a.configure),

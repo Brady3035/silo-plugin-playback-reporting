@@ -11,12 +11,27 @@
   const STREAM_LABEL = Object.fromEntries(STREAMS);
   const CAT_LABEL = Object.fromEntries(CATS);
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const FULL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   const PAGE = 25;
   const MAX_SERIES = 8;
 
   const $ = (id) => document.getElementById(id);
   const statusEl = $("status");
   const main = $("main");
+  // The back link returns to the admin page the report was opened from, or
+  // to the admin home. Plugin pages live under /api/v2/plugin-content/, so
+  // Silo's root is whatever comes before that.
+  (function wireBack() {
+    const back = $("back");
+    const marker = location.pathname.indexOf("/api/v2/plugin-content/");
+    const root = marker > 0 ? location.pathname.slice(0, marker).replace(/\/+$/, "") : "";
+    let href = root + "/admin";
+    try {
+      const ref = new URL(document.referrer);
+      if (ref.origin === location.origin && ref.pathname.startsWith(root + "/admin")) href = ref.pathname + ref.search;
+    } catch (_) { /* no referrer */ }
+    if (back) back.href = href;
+  })();
   if (!main) return; // setup page
 
   const state = {
@@ -79,17 +94,43 @@
   const who = (p) => (p.profile && p.profile.toLowerCase() !== p.user.toLowerCase() ? `${p.user} · ${p.profile}` : p.user);
 
   // ---------- colors ----------
-  // Settings colors override the stylesheet's defaults (both themes).
-  function applyColors(colors, palette) {
-    const root = document.documentElement.style;
-    const vars = { direct_play: "--c-direct", direct_stream: "--c-remux", transcode: "--c-transcode", movies: "--c-movies", tv: "--c-tv", audiobooks: "--c-audiobooks" };
-    for (const [k, v] of Object.entries(colors || {})) if (vars[k] && /^#[0-9a-f]{6}$/i.test(v)) root.setProperty(vars[k], v);
-    const list = (palette || []).filter((c) => /^#[0-9a-f]{6}$/i.test(c));
-    list.forEach((c, i) => root.setProperty(`--p${i}`, c));
-    state.palette = list.length;
+  // Colors are picked under Customize and saved by the plugin; the page gets
+  // the saved set inline. Defaults match app.css.
+  const COLOR_ROLES = [
+    ["Stream types", [["direct_play", "Direct Play", "#12a594"], ["direct_stream", "Remux", "#3d63dd"], ["transcode", "Transcode", "#e5484d"]]],
+    ["Media types", [["movies", "Movies", "#3d63dd"], ["tv", "TV shows", "#8e4ec6"], ["audiobooks", "Audiobooks", "#f5a524"]]],
+  ];
+  const ROLE_VAR = { direct_play: "--c-direct", direct_stream: "--c-remux", transcode: "--c-transcode", movies: "--c-movies", tv: "--c-tv", audiobooks: "--c-audiobooks" };
+  const ROLE_DEFAULT = Object.fromEntries(COLOR_ROLES.flatMap(([, roles]) => roles.map(([k, , d]) => [k, d])));
+  const DEFAULT_PALETTE = ["#3d63dd", "#12a594", "#e5484d", "#f5a524", "#8e4ec6", "#0091ff", "#d6409f", "#46a758", "#e54666", "#00a2c7", "#978365", "#6e56cf"];
+  const MAX_PALETTE = 16;
+  const HEX = /^#[0-9a-f]{6}$/i;
+
+  function readSavedColors() {
+    try {
+      const raw = JSON.parse(($("saved-colors") || {}).textContent || "{}");
+      return { colors: raw.colors || {}, palette: Array.isArray(raw.palette) ? raw.palette : [] };
+    } catch (_) {
+      return { colors: {}, palette: [] };
+    }
   }
-  const PALETTE_DEFAULT = 8;
-  const seriesColor = (i) => `var(--p${i % (state.palette || PALETTE_DEFAULT)})`;
+  // fullColors fills a saved set with defaults so every role has a value.
+  function fullColors(c) {
+    const colors = {};
+    for (const k of Object.keys(ROLE_DEFAULT)) colors[k] = HEX.test(c.colors[k] || "") ? c.colors[k].toLowerCase() : ROLE_DEFAULT[k];
+    const palette = (c.palette || []).filter((x) => HEX.test(x)).slice(0, MAX_PALETTE);
+    return { colors, palette: palette.length ? palette : DEFAULT_PALETTE.slice() };
+  }
+  function applyColors(c) {
+    const root = document.documentElement.style;
+    for (const [k, v] of Object.entries(c.colors)) root.setProperty(ROLE_VAR[k], v);
+    for (let i = 0; i < MAX_PALETTE; i++) root.removeProperty(`--p${i}`);
+    c.palette.forEach((v, i) => root.setProperty(`--p${i}`, v));
+    state.palette = c.palette.length;
+  }
+  state.colors = fullColors(readSavedColors());
+  applyColors(state.colors);
+  const seriesColor = (i) => `var(--p${i % (state.palette || DEFAULT_PALETTE.length)})`;
   const streamColor = (s) => `var(--c-${s === "direct" ? "direct" : s === "unknown" ? "other" : s})`;
   const catColor = (c) => (c === "other" ? "var(--c-other)" : `var(--c-${c})`);
 
@@ -156,7 +197,6 @@
     state.plays = chunks.flatMap(decode).sort((a, b) => b.ended - a.ended);
     state.features = first.features || { clients: false };
     state.status = first.status;
-    applyColors(state.features.colors, state.features.palette);
   }
 
   function showStatus() {
@@ -277,8 +317,55 @@
   const fmtBy = (measure) => (measure === "plays" ? num : measure === "smart" ? dec : hours);
 
   // ---------- charts ----------
-  function legend(series) {
-    return el("ul", { class: "legend" }, series.map((s) => el("li", { style: `--c:${s.color}` }, el("span", { class: "sw" }), s.name)));
+  // One floating tooltip for every chart. It follows the pointer, stays
+  // inside the window, and on touch appears where the finger lands.
+  const tipEl = el("div", { class: "tip", role: "tooltip", hidden: true });
+  document.body.append(tipEl);
+  let tipOwner = null;
+  function placeTip(x, y) {
+    const pad = 12, w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    let left = x + pad, top = y + pad;
+    if (left + w > window.innerWidth - 8) left = x - w - pad;
+    if (top + h > window.innerHeight - 8) top = y - h - pad;
+    tipEl.style.left = Math.max(8, left) + "px";
+    tipEl.style.top = Math.max(8, top) + "px";
+  }
+  function showTip(owner, content, e) {
+    if (tipOwner !== owner) { tipEl.replaceChildren(...[].concat(content())); tipOwner = owner; }
+    tipEl.hidden = false;
+    placeTip(e.clientX, e.clientY);
+  }
+  function hideTip(owner) { if (!owner || tipOwner === owner) { tipEl.hidden = true; tipOwner = null; } }
+  // hover wires a node to the tooltip plus optional enter/leave effects.
+  function hover(node, content, on, off) {
+    node.addEventListener("pointerenter", (e) => { if (on) on(); showTip(node, content, e); });
+    node.addEventListener("pointermove", (e) => showTip(node, content, e));
+    node.addEventListener("pointerleave", () => { if (off) off(); hideTip(node); });
+    node.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") { if (on) on(); showTip(node, content, e); } });
+  }
+  window.addEventListener("scroll", () => hideTip(), { passive: true });
+  document.addEventListener("pointerdown", (e) => { if (tipOwner && !tipOwner.contains(e.target)) hideTip(); });
+
+  function tipRows(title, rows, foot) {
+    return [el("div", { class: "tip-title", text: title }),
+      el("table", { class: "tip-rows" }, rows.map((r) => el("tr", { class: r.strong ? "strong" : null },
+        el("td", {}, r.color ? el("span", { class: "sw", style: `--c:${r.color}` }) : null, r.name),
+        el("td", { class: "v", text: r.value }), r.extra !== undefined ? el("td", { class: "x", text: r.extra }) : null))),
+      foot ? el("div", { class: "tip-foot", text: foot }) : null].filter(Boolean);
+  }
+
+  // legend items highlight their series in the chart they belong to.
+  function legend(series, focus) {
+    return el("ul", { class: "legend" }, series.map((s, i) => {
+      const li = el("li", { style: `--c:${s.color}`, tabindex: focus ? "0" : null }, el("span", { class: "sw" }), s.name);
+      if (focus) {
+        li.addEventListener("pointerenter", () => focus(i));
+        li.addEventListener("pointerleave", () => focus(-1));
+        li.addEventListener("focus", () => focus(i));
+        li.addEventListener("blur", () => focus(-1));
+      }
+      return li;
+    }));
   }
 
   // buckets picks days, weeks or months so a chart keeps a readable number
@@ -304,8 +391,15 @@
   }
 
   function columnLabel(unit, ms) { return unit === "month" ? monthFmt.format(ms) : shortDate.format(ms); }
+  function bucketTitle(unit, ms) {
+    if (unit === "month") return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(ms);
+    if (unit === "week") return `Week of ${dateFmt.format(ms)}`;
+    return new Intl.DateTimeFormat(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" }).format(ms);
+  }
 
   // stackedColumns draws one column per bucket with a stack per series.
+  // Hovering a column dims the others and lists its series; hovering a
+  // legend item dims the other series. Returns [chart, legend].
   function stackedColumns(b, series, fmt, what) {
     const W = 760, H = 260, L = 52, B = 24, T = 10;
     const totals = b.list.map((_, i) => series.reduce((s, x) => s + x.values[i], 0));
@@ -313,69 +407,118 @@
     const step = (W - L) / b.list.length;
     const bw = Math.max(1, Math.min(32, step * 0.72));
     const y = (v) => H - B - (v / maxV) * (H - B - T);
-    const unitName = { day: "day", week: "week", month: "month" }[b.unit];
-    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${what} per ${unitName}` });
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${what} per ${b.unit}` });
     const grid = svg("g", { class: "grid" });
     for (let i = 0; i <= 4; i++) {
       const v = (maxV * i) / 4, yy = y(v);
       grid.append(svg("line", { x1: L, x2: W, y1: yy, y2: yy }), svg("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, fmt(v)));
     }
     root.append(grid);
+    const band = svg("rect", { class: "band", x: 0, y: T, width: step, height: H - B - T, visibility: "hidden" });
+    root.append(band);
     const labelEvery = Math.ceil(b.list.length / 9);
+    const cols = [];
     b.list.forEach((t, i) => {
       let base = 0;
       const x = L + i * step + (step - bw) / 2;
       const col = svg("g", { class: "col" });
-      const tip = [`${b.unit === "week" ? "Week of " : ""}${b.unit === "month" ? monthFmt.format(t) : dateFmt.format(t)}: ${fmt(totals[i])}`];
-      series.forEach((s) => {
+      series.forEach((s, si) => {
         const v = s.values[i];
         if (v > 0) {
-          col.append(svg("rect", { x, y: y(base + v), width: bw, height: Math.max(0.5, y(base) - y(base + v)), fill: s.color }));
-          tip.push(`${s.name}: ${fmt(v)}`);
+          const top = y(base + v), h = Math.max(0.5, y(base) - top);
+          col.append(svg("rect", { x, y: top, width: bw, height: h, fill: s.color, "data-s": si, rx: Math.min(2, bw / 4) }));
         }
         base += v;
       });
       // A full-height hit area so short columns are easy to hover.
-      col.append(svg("rect", { x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" }, svg("title", {}, tip.join("\n"))));
+      const hit = svg("rect", { class: "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
+      col.append(hit);
+      hover(hit, () => {
+        const rows = series.map((s) => ({ name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
+        return tipRows(bucketTitle(b.unit, t), [
+          { name: "Total", value: fmt(totals[i]), strong: true },
+          ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]) })),
+        ], rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played");
+      }, () => {
+        root.classList.add("hovering"); col.classList.add("active");
+        band.setAttribute("x", L + i * step); band.setAttribute("visibility", "visible");
+      }, () => {
+        root.classList.remove("hovering"); col.classList.remove("active"); band.setAttribute("visibility", "hidden");
+      });
+      cols.push(col);
       root.append(col);
       if (i % labelEvery === 0) root.append(svg("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" }, columnLabel(b.unit, t)));
     });
-    return el("div", { class: "chart" }, root);
+    const focus = (si) => {
+      root.classList.toggle("focusing", si >= 0);
+      for (const r of root.querySelectorAll("rect[data-s]")) r.classList.toggle("on", Number(r.dataset.s) === si);
+    };
+    return [el("div", { class: "chart" }, root), legend(series, focus)];
   }
 
   // donut shows shares of a whole; slices are [{name, value, color, sub}].
-  function donut(slices, center, centerSub, fmt) {
+  // Slices and their legend rows highlight each other on hover.
+  function donut(slices, center, centerSub, fmt, opts) {
+    const o = opts || {};
     const total = slices.reduce((s, x) => s + x.value, 0);
-    const R = 70, r = 46, C = 80;
-    const root = svg("svg", { viewBox: "0 0 160 160", class: "donut", role: "img", "aria-label": slices.map((s) => `${s.name} ${pct(s.value, total)}`).join(", ") });
+    const size = o.size || 160, C = size / 2, R = C - 6, r = R * (o.pie ? 0 : 0.64);
+    const root = svg("svg", { viewBox: `0 0 ${size} ${size}`, class: "donut" + (o.pie ? " pie" : ""), style: `width:${size}px;height:${size}px`,
+      role: "img", "aria-label": slices.map((s) => `${s.name} ${pct(s.value, total)}`).join(", ") });
+    const nodes = [];
+    const keysEl = el("ul", { class: "donut-keys" + (slices.length > 8 ? " long" : "") });
+    const focus = (i) => {
+      root.classList.toggle("focusing", i >= 0);
+      nodes.forEach((n, j) => n && n.classList.toggle("on", j === i));
+      [...keysEl.children].forEach((li, j) => li.classList.toggle("on", j === i));
+    };
+    const tipFor = (s) => () => tipRows(s.name, [{ name: "Share", value: pct(s.value, total), strong: true }], s.sub || fmt(s.value));
     if (total <= 0) {
       root.append(svg("circle", { cx: C, cy: C, r: (R + r) / 2, fill: "none", stroke: "var(--line)", "stroke-width": R - r }));
     } else {
       let a0 = -Math.PI / 2;
-      const shown = slices.filter((s) => s.value > 0);
-      for (const s of shown) {
+      const shown = slices.filter((x) => x.value > 0).length;
+      slices.forEach((s, i) => {
+        if (s.value <= 0) { nodes.push(null); return; }
         const frac = s.value / total;
         const a1 = a0 + frac * Math.PI * 2;
         let node;
-        if (shown.length === 1) {
-          node = svg("circle", { cx: C, cy: C, r: (R + r) / 2, fill: "none", stroke: s.color, "stroke-width": R - r });
+        if (shown === 1) {
+          node = o.pie ? svg("circle", { cx: C, cy: C, r: R, fill: s.color })
+            : svg("circle", { cx: C, cy: C, r: (R + r) / 2, fill: "none", stroke: s.color, "stroke-width": R - r });
         } else {
           const gap = Math.min(0.012, frac * 0.2);
-          const p = (rad, a) => `${C + rad * Math.cos(a)} ${C + rad * Math.sin(a)}`;
+          const p = (rad, a) => `${(C + rad * Math.cos(a)).toFixed(2)} ${(C + rad * Math.sin(a)).toFixed(2)}`;
           const b0 = a0 + gap, b1 = a1 - gap, large = b1 - b0 > Math.PI ? 1 : 0;
-          node = svg("path", { fill: s.color, d: `M ${p(R, b0)} A ${R} ${R} 0 ${large} 1 ${p(R, b1)} L ${p(r, b1)} A ${r} ${r} 0 ${large} 0 ${p(r, b0)} Z` });
+          node = svg("path", { fill: s.color, d: r > 0
+            ? `M ${p(R, b0)} A ${R} ${R} 0 ${large} 1 ${p(R, b1)} L ${p(r, b1)} A ${r} ${r} 0 ${large} 0 ${p(r, b0)} Z`
+            : `M ${C} ${C} L ${p(R, b0)} A ${R} ${R} 0 ${large} 1 ${p(R, b1)} Z` });
+          // Hover pushes the slice out a little along its middle angle.
+          const mid = (a0 + a1) / 2;
+          node.style.setProperty("--dx", (Math.cos(mid) * 4).toFixed(2) + "px");
+          node.style.setProperty("--dy", (Math.sin(mid) * 4).toFixed(2) + "px");
         }
-        node.append(svg("title", {}, `${s.name}: ${fmt(s.value)} (${pct(s.value, total)})`));
+        node.classList.add("slice");
+        hover(node, tipFor(s), () => focus(i), () => focus(-1));
+        nodes.push(node);
         root.append(node);
         a0 = a1;
-      }
+      });
     }
-    root.append(svg("text", { x: C, y: C - 2, "text-anchor": "middle", class: "donut-value" }, center),
-      svg("text", { x: C, y: C + 16, "text-anchor": "middle", class: "donut-sub" }, centerSub));
-    const keys = el("ul", { class: "donut-keys" }, slices.map((s) => el("li", { style: `--c:${s.color}` },
-      el("span", { class: "sw" }), el("span", { class: "k-name", text: s.name }),
-      el("span", { class: "k-pct", text: pct(s.value, total) }), el("span", { class: "k-sub", text: s.sub || fmt(s.value) }))));
-    return el("div", { class: "donut-wrap" }, root, keys);
+    if (!o.pie) {
+      root.append(svg("text", { x: C, y: C - 2, "text-anchor": "middle", class: "donut-value" }, center),
+        svg("text", { x: C, y: C + 16, "text-anchor": "middle", class: "donut-sub" }, centerSub));
+    }
+    slices.forEach((s, i) => {
+      const li = el("li", { style: `--c:${s.color}`, tabindex: "0" },
+        el("span", { class: "sw" }), el("span", { class: "k-name", title: s.name, text: s.name }),
+        el("span", { class: "k-pct", text: pct(s.value, total) }), el("span", { class: "k-sub", text: s.sub || fmt(s.value) }));
+      li.addEventListener("pointerenter", () => focus(i));
+      li.addEventListener("pointerleave", () => focus(-1));
+      li.addEventListener("focus", () => focus(i));
+      li.addEventListener("blur", () => focus(-1));
+      keysEl.append(li);
+    });
+    return el("div", { class: "donut-wrap" }, root, keysEl);
   }
 
   // barList is a ranked list with proportional bars.
@@ -450,7 +593,7 @@
           tile("Smart plays", dec(sum(plays, (p) => p.smart)), "watch time ÷ length"),
           tile(split ? "Active profiles" : "Active users", num(people.length)),
           tile("Transcoded", pct(plays.filter((p) => p.stream === "transcode").length, plays.length), "of plays")),
-        panel(`${what} per ${b.unit}`, stackedColumns(b, series, fmt, what), legend(series)),
+        panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what)),
         el("div", { class: "grid2" },
           panel(split ? "By profile" : "By user", barList(people, (g) => (split ? who(g.items[0]) : g.items[0].user), (g) => fmt(g.value),
             (g) => `${num(g.plays)} plays · ${hours(g.time)}`, stack === "user" ? (g) => colorOf.get(g.key) || "var(--c-other)" : null, 15)),
@@ -486,9 +629,12 @@
     const fmt = fmtBy(measure);
     return el("div", { class: "heat", role: "img", "aria-label": "Activity by weekday and hour" },
       el("span"), Array.from({ length: 24 }, (_, h) => el("span", { class: "hour", text: h % 3 === 0 ? String(h) : "" })),
-      grid.map((row, d) => [el("span", { class: "wd", text: WEEKDAYS[d] }), row.map((v, h) => el("span", {
-        class: "cell", style: v > 0 ? `--a:${(0.15 + 0.85 * (v / maxV)).toFixed(3)}` : null,
-        title: `${WEEKDAYS[d]} ${String(h).padStart(2, "0")}:00 · ${fmt(v)}` }))]));
+      grid.map((row, d) => [el("span", { class: "wd", text: WEEKDAYS[d] }), row.map((v, h) => {
+        const cell = el("span", { class: "cell", style: v > 0 ? `--a:${(0.15 + 0.85 * (v / maxV)).toFixed(3)}` : null });
+        hover(cell, () => tipRows(`${FULL_DAYS[d]}, ${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`,
+          [{ name: { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure], value: fmt(v), strong: true }]));
+        return cell;
+      })]));
   }
 
   // ---------- Users tab ----------
@@ -501,7 +647,7 @@
     const profileSel = el("select", {});
     const fillProfiles = () => {
       const profiles = [...new Set(state.plays.filter((p) => p.userId === userSel.value).map((p) => p.profile))].sort();
-      profileSel.replaceChildren(el("option", { value: "", text: "All profiles" }), profiles.map((p) => el("option", { value: p, text: p || "(no profile)" })));
+      profileSel.replaceChildren(el("option", { value: "", text: "All profiles" }), ...profiles.map((p) => el("option", { value: p, text: p || "(no profile)" })));
       const cur = setting(T, "profile", "");
       profileSel.value = profiles.includes(cur) ? cur : "";
       profileSel.disabled = profiles.length < 2;
@@ -607,9 +753,23 @@
         const items = plays.filter((p) => p.cat === c);
         const groups = groupBy(items, key, measure);
         const total = sum(items, MEASURES[measure]);
-        return panel([title, el("span", { class: "total", text: items.length ? `${measure === "smart" ? dec(total) + smartUnit[c] : fmt(total)} total` : "" })],
-          items.length ? barList(groups, label, valueText(c), subText(c), () => catColor(c), 20) : empty(note || `No ${title.toLowerCase()} in this range.`));
+        const totalText = measure === "smart" ? dec(total) + smartUnit[c] : fmt(total);
+        const head = [title, el("span", { class: "total", text: items.length ? `${totalText} total · ${num(groups.length)} ${groups.length === 1 ? "title" : "titles"}` : "" })];
+        if (!items.length) return panel(head, empty(note || `No ${title.toLowerCase()} in this range.`));
+        if (chart === "list") return panel(head, barList(groups, label, valueText(c), subText(c), () => catColor(c), limit));
+        // Pie: the top items, then everything else as one slice.
+        const top = groups.slice(0, limit), rest = groups.slice(limit);
+        const slices = top.map((g, i) => ({ name: label(g), value: g.value, color: seriesColor(i), sub: subText(c)(g) ? `${valueText(c)(g)} · ${subText(c)(g)}` : valueText(c)(g) }));
+        if (rest.length) {
+          const v = rest.reduce((a, g) => a + g.value, 0);
+          slices.push({ name: `Other (${num(rest.length)} ${rest.length === 1 ? "title" : "titles"})`, value: v, color: "var(--c-other)",
+            sub: measure === "smart" ? dec(v) + smartUnit[c] : fmt(v) });
+        }
+        return panel(head, donut(slices, "", "", valueText(c), { pie: true, size: 200 }));
       };
+      const chart = setting(T, "chart", "list");
+      const limitSetting = setting(T, "limit", "10");
+      const limit = limitSetting === "all" ? Infinity : Number(limitSetting) || 10;
       const sections = [
         section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
         section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
@@ -624,6 +784,8 @@
     view.append(toolbar(
       rangeControl(T, D, draw),
       segmented("View", T, "measure", [["plays", "Plays"], ["time", "Time"], ["smart", "Smart plays"]], "time", draw),
+      segmented("Chart", T, "chart", [["list", "List"], ["pie", "Pie"]], "list", draw),
+      selectControl("Show", T, "limit", [["5", "Top 5"], ["10", "Top 10"], ["20", "Top 20"], ["50", "Top 50"], ["all", "All"]], "10", draw),
       selectControl("User", T, "user", userOpts, "", draw)), content);
     draw();
   }
@@ -671,6 +833,128 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  // ---------- Customize (colors) ----------
+  const DRAFT_KEY = "colors-draft";
+  // spreadColor suggests a new color once the defaults are used: hues a
+  // golden angle apart, so neighbours never look alike.
+  function spreadColor(i) {
+    const h = (i * 137.508) % 360, s = 0.62, l = 0.52;
+    const f = (n) => {
+      const k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+      return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0");
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  }
+  const copy = (c) => JSON.parse(JSON.stringify(c));
+
+  // openCustomize shows the color pickers. Changes preview live; Cancel
+  // returns to the colors the page had, Save stores them in the plugin.
+  function openCustomize(start, note) {
+    const original = copy(state.colors);
+    let work = copy(start || state.colors);
+    const preview = () => { applyColors(work); render(); };
+    const msg = el("p", { class: "dlg-msg" + (note ? " error" : ""), role: "status", "aria-live": "polite", text: note || "" });
+
+    const picker = (value, label, onInput) => {
+      const input = el("input", { type: "color", value, "aria-label": label });
+      const code = el("code", { text: value });
+      input.addEventListener("input", () => { code.textContent = input.value; onInput(input.value); preview(); });
+      return [input, code];
+    };
+    const body = el("div", { class: "dlg-body" });
+    const addBtn = el("button", { type: "button", class: "add-color", "aria-label": "Add color", title: "Add color" }, "+");
+    const paletteList = el("div", { class: "palette" });
+    const drawPalette = () => {
+      paletteList.replaceChildren(...work.palette.map((c, i) => {
+        const input = el("input", { type: "color", value: c, "aria-label": `User color ${i + 1}`, title: `Color ${i + 1}: ${c}` });
+        input.addEventListener("input", () => { work.palette[i] = input.value; input.title = `Color ${i + 1}: ${input.value}`; preview(); });
+        return el("div", { class: "swatch-edit" }, input,
+          work.palette.length > 1 ? el("button", { type: "button", class: "remove", "aria-label": `Remove color ${i + 1}`, title: "Remove",
+            onclick: () => { work.palette.splice(i, 1); drawPalette(); preview(); } }, "×") : null);
+      }), addBtn);
+      addBtn.disabled = work.palette.length >= MAX_PALETTE;
+      addBtn.title = addBtn.disabled ? `Up to ${MAX_PALETTE} colors` : "Add color";
+    };
+    const drawBody = () => {
+      body.replaceChildren(
+        ...COLOR_ROLES.map(([group, roles]) => el("fieldset", { class: "colors" },
+          el("legend", { text: group }),
+          roles.map(([k, label]) => el("label", { class: "color-row" },
+            el("span", { class: "c-label", text: label }),
+            picker(work.colors[k], `${label} color`, (v) => { work.colors[k] = v; }))))),
+        el("fieldset", { class: "colors" }, el("legend", { text: "User colors" }),
+          el("p", { class: "note", text: "Used in order for users in the Activity chart and for titles in pie charts. Click a color to change it, + to add one, × to remove it." }),
+          paletteList));
+      drawPalette();
+    };
+    addBtn.addEventListener("click", () => {
+      // Suggest a default color that isn't in use yet.
+      work.palette.push(DEFAULT_PALETTE.find((c) => !work.palette.includes(c)) || spreadColor(work.palette.length));
+      drawPalette(); preview();
+      const inputs = paletteList.querySelectorAll('input[type="color"]');
+      inputs[inputs.length - 1].focus();
+      inputs[inputs.length - 1].click();
+    });
+    drawBody();
+
+    const close = (saved) => {
+      if (!saved) { state.colors = original; applyColors(original); render(); }
+      dlg.close(); dlg.remove();
+    };
+    const saveBtn = el("button", { type: "button", class: "small primary", text: "Save" });
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true; msg.textContent = "Saving…"; msg.classList.remove("error");
+      try {
+        const res = await fetch("settings/colors", { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(work) });
+        if (res.status === 401 || res.status === 403) throw Object.assign(new Error("expired"), { expired: true });
+        const saved = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(saved.error || `The plugin answered ${res.status}.`);
+        state.colors = fullColors(saved);
+        remember(DRAFT_KEY, "");
+        close(true);
+        applyColors(state.colors); render();
+      } catch (err) {
+        saveBtn.disabled = false;
+        msg.classList.add("error");
+        if (err.expired) {
+          // Access to this page lasts five minutes; keep the picks for next time.
+          remember(DRAFT_KEY, JSON.stringify(work));
+          msg.textContent = "Your access to this page expired, so the colors weren't saved. Open Playback Reporting again from the admin menu and your picks will be waiting.";
+        } else {
+          msg.textContent = err.message || "Saving failed.";
+        }
+      }
+    });
+    const dlg = el("dialog", { class: "dlg", "aria-labelledby": "dlg-title" },
+      el("div", { class: "dlg-head" }, el("h2", { id: "dlg-title", text: "Customize colors" }),
+        el("button", { type: "button", class: "icon", "aria-label": "Close", onclick: () => close(false) }, "×")),
+      body, msg,
+      el("div", { class: "dlg-foot" },
+        el("button", { type: "button", class: "small link", text: "Reset to defaults",
+          onclick: () => { work = fullColors({ colors: {}, palette: [] }); drawBody(); preview(); } }),
+        el("span", { class: "grow" }),
+        el("button", { type: "button", class: "small", text: "Cancel", onclick: () => close(false) }),
+        saveBtn));
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(false); });
+    document.body.append(dlg);
+    dlg.showModal();
+    preview();
+  }
+
+  // A save that failed because access expired reopens with those picks.
+  function resumeDraft() {
+    const raw = remember(DRAFT_KEY);
+    if (!raw) return;
+    try {
+      openCustomize(fullColors(JSON.parse(raw)), "These are the colors you picked before your access expired. Save to keep them.");
+    } catch (_) { remember(DRAFT_KEY, ""); }
+  }
+
+  function wireHeader() {
+    $("customize").addEventListener("click", () => openCustomize());
+  }
+
   // ---------- tabs ----------
   const RENDER = { activity: renderActivity, users: renderUsers, breakdown: renderBreakdown, clients: renderClients, history: renderHistory };
 
@@ -704,10 +988,13 @@
   }
 
   wireTabs();
+  wireHeader();
   load().then(() => {
     $("tab-clients").hidden = !state.features.clients;
     showStatus();
     render();
+    $("customize").disabled = false;
+    resumeDraft();
   }).catch((err) => {
     statusEl.textContent = err.message || String(err);
     statusEl.classList.add("error");

@@ -1,0 +1,98 @@
+package report
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+// ColorSettings are the chart colors an admin picks on the report page.
+// Missing roles and an empty palette mean the page's defaults.
+type ColorSettings struct {
+	Colors  map[string]string `json:"colors"`
+	Palette []string          `json:"palette"`
+}
+
+const (
+	colorsStateKey = "settings/colors"
+	maxPalette     = 16
+)
+
+// clean keeps known roles with valid #rrggbb values and up to 16 palette
+// colors, lowercased.
+func (c ColorSettings) clean() ColorSettings {
+	out := ColorSettings{Colors: map[string]string{}, Palette: []string{}}
+	for _, k := range ColorKeys {
+		if v := strings.ToLower(strings.TrimSpace(c.Colors[k])); hexColor.MatchString(v) {
+			out.Colors[k] = v
+		}
+	}
+	for _, v := range c.Palette {
+		if v = strings.ToLower(strings.TrimSpace(v)); hexColor.MatchString(v) && len(out.Palette) < maxPalette {
+			out.Palette = append(out.Palette, v)
+		}
+	}
+	return out
+}
+
+// colors returns the saved colors, read from the plugin's state on first
+// use. Colors set in the old settings form are the fallback.
+func (h *Handler) colors(ctx context.Context) ColorSettings {
+	h.colorMu.Lock()
+	defer h.colorMu.Unlock()
+	if h.savedColors == nil && h.State != nil {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if raw, ok, err := h.State.ReadInstanceState(ctx, colorsStateKey); err == nil {
+			saved := ColorSettings{}
+			if ok {
+				_ = json.Unmarshal(raw, &saved)
+			}
+			saved = saved.clean()
+			if !ok {
+				saved = h.legacyColors()
+			}
+			h.savedColors = &saved
+		}
+	}
+	if h.savedColors != nil {
+		return *h.savedColors
+	}
+	return h.legacyColors()
+}
+
+func (h *Handler) legacyColors() ColorSettings {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.options == nil {
+		return ColorSettings{}.clean()
+	}
+	return ColorSettings{Colors: h.options.Colors, Palette: h.options.Palette}.clean()
+}
+
+func (h *Handler) saveColors(ctx context.Context, c ColorSettings) (ColorSettings, error) {
+	c = c.clean()
+	if h.State == nil {
+		return c, errNoState
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return c, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := h.State.WriteInstanceState(ctx, colorsStateKey, raw); err != nil {
+		return c, err
+	}
+	h.colorMu.Lock()
+	h.savedColors = &c
+	h.colorMu.Unlock()
+	return c, nil
+}
+
+type stateError string
+
+func (e stateError) Error() string { return string(e) }
+
+const errNoState = stateError("this plugin has no storage to save colors in")

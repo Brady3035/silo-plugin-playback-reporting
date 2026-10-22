@@ -17,11 +17,15 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 
 - **Activity**: a bar graph of watch time, plays or smart plays per day, week or month (picked from the date range). Stack by user, media type or stream type; **Separate profiles** splits each account into its profiles. Filter to Movies, TV shows or Audiobooks. Includes a weekday × hour heatmap.
 - **Users**: pick a user (and optionally one profile). Totals for movies, TV and audiobooks, a donut of Direct Play / Remux / Transcode, a donut of what they watch, and a paged list of every session with CSV export. **All time** spans that user's own first to last play.
-- **Breakdown**: top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays.
+- **Breakdown**: top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other).
 - **History**: every play in a range, with CSV export.
 - **Clients**: only when *Track clients* is on.
 
 **Smart plays** = watch time ÷ length of the movie, episode or book. Two half-watched episodes count as one episode watched; a movie watched twice counts 2×.
+
+## Colors
+
+Select **Customize** at the top right of the report page to pick colors for Direct Play, Remux, Transcode, Movies, TV shows and Audiobooks, and the list of colors used for users and pie slices (add, change or remove up to 16). Changes preview live and are saved by the plugin for everyone who opens the report.
 
 ## Settings (plugin settings page)
 
@@ -31,8 +35,6 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 | | Server address | Optional; leave empty to use Silo's internal address. |
 | Report filters | Hide plays shorter than (seconds) | Leaves short plays out of every report. |
 | | Ignore list | One per line: `username` hides an account, `username/profile` hides one profile. Case-insensitive. |
-| Chart colors | Direct Play, Remux, Transcode, Movies, TV shows, Audiobooks | `#rrggbb`. Empty or invalid values use the defaults. |
-| | User colors | Comma-separated `#rrggbb` list for users in the Activity chart (up to 16). |
 | Optional reports | Track clients | Polls live sessions every 15 s to record client app and local/remote. Off by default. |
 
 Filters and the ignore list only hide plays in the reports. Silo's history is never changed. The page's status line shows how many plays are hidden.

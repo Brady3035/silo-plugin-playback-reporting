@@ -8,8 +8,14 @@
 </head>
 <body>
 <header class="top">
-  <h1>Playback Reporting</h1>
-  <p class="status" id="status" aria-live="polite">{{if .Problem}}Not set up yet{{else}}Loading playback history…{{end}}</p>
+  <a class="back" id="back" href="/admin"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Admin</a>
+  <div class="top-row">
+    <div>
+      <h1>Playback Reporting</h1>
+      <p class="status" id="status" aria-live="polite">{{if .Problem}}Not set up yet{{else}}Loading playback history…{{end}}</p>
+    </div>
+    {{if not .Problem}}<button type="button" class="small" id="customize" disabled><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="5" cy="6" r="2.2" fill="currentColor"/><circle cx="11" cy="6" r="2.2" fill="currentColor" opacity=".6"/><circle cx="8" cy="11" r="2.2" fill="currentColor" opacity=".35"/></svg>Customize</button>{{end}}
+  </div>
 </header>
 {{if .Problem}}
 <main class="setup">
@@ -31,6 +37,7 @@
   <section class="panel loading" id="loading"><div class="spinner" aria-hidden="true"></div><p>Loading playback history…</p></section>
 </main>
 {{end}}
+<script type="application/json" id="saved-colors">{{.Colors}}</script>
 <script src="assets/app.js?v={{.Version}}" defer></script>
 </body>
 </html>
