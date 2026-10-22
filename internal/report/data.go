@@ -1,6 +1,8 @@
 package report
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,10 +13,15 @@ import (
 // The page loads every play once, in chunks, and computes all reports in the
 // browser. The host proxy authorizes plugin requests with a launch cookie that
 // lasts five minutes and is not renewed, so a page that kept asking the plugin
-// for each report would stop working five minutes after it opened. The host
-// also reads at most 4 MiB per plugin response, which bounds a chunk.
+// for each report would stop working five minutes after it opened.
+//
+// Chunks are gzipped JSON (Silo doesn't compress plugin responses; the page
+// unzips them with DecompressionStream), about a fifth of the raw size. The
+// host reads at most 4 MiB per plugin response, so a chunk that compresses
+// to more than maxChunkBytes is split again with fewer plays.
 const (
-	playsPerChunk = 25000
+	playsPerChunk = 100000
+	minPerChunk   = 5000
 	snapshotTTL   = 10 * time.Minute
 	keptSnapshots = 4
 )
@@ -80,9 +87,28 @@ func (in *interner) add(list *[]string, value string) int {
 	return in.index[value]
 }
 
-// encodeChunks splits plays into encoded /data responses. clients may be nil.
+// maxChunkBytes is the largest compressed chunk sent (a var for tests).
+var maxChunkBytes = 3 << 20
+
+// encodeChunks splits plays into gzipped /data responses. clients may be nil.
 func encodeChunks(id string, plays []Play, status Status, feat features, clients *Tracker, now time.Time) ([][]byte, error) {
-	n := max(1, int(math.Ceil(float64(len(plays))/playsPerChunk)))
+	for per := playsPerChunk; ; per /= 2 {
+		out, err := encodeChunksOf(per, id, plays, status, feat, clients, now)
+		if err != nil {
+			return nil, err
+		}
+		fits := true
+		for _, b := range out {
+			fits = fits && len(b) <= maxChunkBytes
+		}
+		if fits || per/2 < minPerChunk {
+			return out, nil
+		}
+	}
+}
+
+func encodeChunksOf(playsPerChunk int, id string, plays []Play, status Status, feat features, clients *Tracker, now time.Time) ([][]byte, error) {
+	n := max(1, int(math.Ceil(float64(len(plays))/float64(playsPerChunk))))
 	out := make([][]byte, 0, n)
 	for i := range n {
 		part := plays[min(i*playsPerChunk, len(plays)):min((i+1)*playsPerChunk, len(plays))]
@@ -137,11 +163,15 @@ func encodeChunks(id string, plays []Play, status Status, feat features, clients
 			})
 		}
 		normalize(&c.Dict)
-		b, err := json.Marshal(c)
-		if err != nil {
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+		if err := json.NewEncoder(zw).Encode(c); err != nil {
 			return nil, err
 		}
-		out = append(out, b)
+		if err := zw.Close(); err != nil {
+			return nil, err
+		}
+		out = append(out, buf.Bytes())
 	}
 	return out, nil
 }

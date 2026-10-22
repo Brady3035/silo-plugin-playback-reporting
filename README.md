@@ -19,6 +19,8 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 - **Users**: pick a user (and optionally one profile). Totals for movies, TV and audiobooks, a donut of Direct Play / Remux / Transcode, a donut of what they watch, and a paged list of every session with CSV export. **All time** spans that user's own first to last play.
 - **Breakdown**: top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other).
 - **History**: every play in a range, with CSV export.
+
+The session tables on **Users** and **History** filter by column: click a value in a row (a user, a type, a stream, Done) to show only rows with it, or open the funnel in a column header to tick values, type a title, or set a minimum watch time. Active filters show as chips above the table, and **Export CSV** exports what's shown.
 - **Clients**: only when *Track clients* is on.
 
 **Smart plays** = watch time ÷ length of the movie, episode or book. Two half-watched episodes count as one episode watched; a movie watched twice counts 2×.
@@ -54,6 +56,10 @@ Releases are built by GitHub Actions; nothing is built by hand.
 
 - **Actions → Release → Run workflow** bumps the latest tag (patch, minor or major), or push a tag yourself: `git tag v0.3.0 && git push origin v0.3.0`.
 - The workflow tests, builds `plugin-linux-amd64`, `plugin-linux-arm64` and `plugin-darwin-arm64`, attaches them with `checksums.txt` to a GitHub release, and commits the new `repository.json` to `main`. Silo servers that added the repository pick it up on their next update check.
+
+## Performance
+
+The page loads every play once and computes the reports in the browser, because Silo's access to a plugin page lasts five minutes and isn't renewed. Data is sent gzipped (about 17 bytes per play), so 100,000 plays is about 1.8 MB and 500,000 about 8.5 MB. Measured in Chromium with synthetic data: with 100,000 plays every control responds in about 0.2 s; with 500,000 plays the all-time Activity chart takes about 0.5 s per change and the tab uses about 250 MB of memory.
 
 ## Build locally
 

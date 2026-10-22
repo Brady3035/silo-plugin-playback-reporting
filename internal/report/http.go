@@ -155,7 +155,10 @@ func (h *Handler) data(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResp
 	if index < 0 || index >= len(snap.chunks) {
 		return jsonResponse(http.StatusNotFound, []byte(`{"error":"No such chunk."}`))
 	}
-	return jsonResponse(http.StatusOK, snap.chunks[index])
+	return &pluginv1.HandleHTTPResponse{StatusCode: http.StatusOK, Body: snap.chunks[index], Headers: map[string]string{
+		"Content-Type":  "application/gzip",
+		"Cache-Control": "no-store",
+	}}
 }
 
 // handleColors saves the settings picked under Customize (POST, JSON). The

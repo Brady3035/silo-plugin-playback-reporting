@@ -88,7 +88,26 @@
   const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   const monthFmt = new Intl.DateTimeFormat(undefined, { month: "short", year: "2-digit" });
   const dateTimeFmt = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  // Local time without Date objects: the zone offset is looked up once per
+  // UTC hour and the rest is arithmetic. Reports over hundreds of thousands
+  // of plays would otherwise spend most of their time creating Dates.
+  const HOUR = 3600000;
+  const offsets = new Map();
+  function offsetAt(t) {
+    const k = Math.floor(t / HOUR);
+    let o = offsets.get(k);
+    if (o === undefined) { o = -new Date(k * HOUR).getTimezoneOffset() * 60000; offsets.set(k, o); }
+    return o;
+  }
+  const localMs = (t) => t + offsetAt(t);
+  // startOfDay is local midnight, correct across daylight-saving changes.
+  function startOfDay(t) {
+    const o = offsetAt(t), mid = Math.floor((t + o) / DAY) * DAY;
+    const o2 = offsetAt(mid - o);
+    return mid - (o2 === o ? o : o2);
+  }
+  // Monday = 0 (1 Jan 1970 was a Thursday).
+  const weekdayOfLocal = (local) => (Math.floor(local / DAY) + 3) % 7;
   const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   const playTitle = (p) => p.series ? `${p.series} · S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(2, "0")} · ${p.title}` : p.title;
   const who = (p) => (p.profile && p.profile.toLowerCase() !== p.user.toLowerCase() ? `${p.user} · ${p.profile}` : p.user);
@@ -135,9 +154,17 @@
   const catColor = (c) => (c === "other" ? "var(--c-other)" : `var(--c-${c})`);
 
   // ---------- loading ----------
+  // fetchJSON reads a /data chunk. Chunks arrive gzipped (Silo doesn't
+  // compress plugin responses) and are unzipped here; errors are plain JSON.
   async function fetchJSON(url) {
-    const res = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const res = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/gzip, application/json" } });
     let body = null;
+    if (res.ok && (res.headers.get("Content-Type") || "").startsWith("application/gzip")) {
+      if (typeof DecompressionStream === "undefined") {
+        throw new Error("This browser is too old for Playback Reporting. Use a current version of Chrome, Edge, Firefox or Safari.");
+      }
+      return new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    }
     try { body = await res.json(); } catch (_) { /* not JSON */ }
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) throw new Error("Your access to this page expired. Open Playback Reporting again from the admin menu.");
@@ -165,8 +192,9 @@
       const type = d.types[r[col.type]] || "";
       const watched = r[col.watched], duration = r[col.duration], completed = (r[col.flags] & 1) !== 0;
       const profile = d.profiles[r[col.profile]] || "";
+      const ended = r[col.ended] * 1000;
       return {
-        ended: r[col.ended] * 1000,
+        ended, day: startOfDay(ended),
         started: r[col.started] * 1000,
         userId: user[0], user: user[1], profile,
         profileKey: user[0] + "\u0000" + profile,
@@ -390,7 +418,22 @@
       else if (unit === "week") d.setDate(d.getDate() + 7);
       else d.setMonth(d.getMonth() + 1);
     }
-    return { unit, list, start };
+    // column maps a play's local day to its column, or -1 outside the
+    // chart. Days and weeks are arithmetic (rounding absorbs daylight-saving
+    // hours); months are looked up once per day.
+    const first = list[0], memo = new Map();
+    const column = (day) => {
+      if (day < first) return -1;
+      let i;
+      if (unit === "day") i = Math.round((day - first) / DAY);
+      else if (unit === "week") i = Math.floor(Math.round((day - first) / DAY) / 7);
+      else {
+        i = memo.get(day);
+        if (i === undefined) { i = list.indexOf(start(day)); memo.set(day, i); }
+      }
+      return i < list.length ? i : -1;
+    };
+    return { unit, list, start, column };
   }
 
   function columnLabel(unit, ms) { return unit === "month" ? monthFmt.format(ms) : shortDate.format(ms); }
@@ -582,7 +625,6 @@
       const from = range[0] > 0 ? range[0] : startOfDay(plays[plays.length - 1].ended);
       const to = Math.min(range[1], startOfDay(Date.now()) + DAY);
       const b = buckets(from, to);
-      const index = new Map(b.list.map((t, i) => [t, i]));
       const key = stack === "user" ? (split ? (p) => p.profileKey : (p) => p.userId) : stack === "stream" ? (p) => p.stream : (p) => p.cat;
       const name = stack === "user" ? (g) => (split ? who(g.items[0]) : g.items[0].user) : stack === "stream" ? (g) => STREAM_LABEL[g.key] : (g) => CAT_LABEL[g.key];
       const groups = groupBy(plays, key, measure);
@@ -596,9 +638,12 @@
       const rest = groups.slice(shown.length);
       if (rest.length) series.push({ name: `${rest.length} more`, items: rest.flatMap((g) => g.items), values: new Array(b.list.length).fill(0), color: "var(--c-other)" });
       const f = MEASURES[measure];
-      for (const s of series) for (const p of s.items) { const i = index.get(b.start(p.ended)); if (i !== undefined) s.values[i] += f(p); }
+      for (const s of series) {
+        const values = s.values;
+        for (const p of s.items) { const i = b.column(p.day); if (i >= 0) values[i] += f(p); }
+      }
       const what = { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure];
-      const people = groupBy(plays, split ? (p) => p.profileKey : (p) => p.userId, measure);
+      const people = stack === "user" ? groups : groupBy(plays, split ? (p) => p.profileKey : (p) => p.userId, measure);
       const colorOf = new Map(shown.map((g, i) => [g.key, seriesColor(i)]));
       content.replaceChildren(
         el("div", { class: "tiles" },
@@ -624,19 +669,21 @@
 
   function heatmap(plays, measure) {
     const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    const f = MEASURES[measure];
     for (const p of plays) {
       const start = p.started || p.ended - p.watched * 1000;
       if (measure !== "time") {
-        const d = new Date(start); grid[(d.getDay() + 6) % 7][d.getHours()] += MEASURES[measure](p); continue;
+        const l = localMs(start);
+        grid[weekdayOfLocal(l)][Math.floor((l % DAY) / HOUR)] += f(p);
+        continue;
       }
       // Spread watch time over the hours the play ran.
-      let left = p.watched * 1000, t = Math.max(start, p.ended - left);
+      let left = p.watched * 1000, l = localMs(Math.max(start, p.ended - left));
       while (left > 0) {
-        const d = new Date(t);
-        const next = new Date(d); next.setMinutes(60, 0, 0);
-        const span = Math.min(left, next.getTime() - t);
-        grid[(d.getDay() + 6) % 7][d.getHours()] += span / 1000;
-        left -= span; t += span;
+        const dayIdx = Math.floor(l / DAY), within = l - dayIdx * DAY, h = Math.floor(within / HOUR);
+        const span = Math.min(left, (h + 1) * HOUR - within);
+        grid[(dayIdx + 3) % 7][h] += span / 1000;
+        left -= span; l += span;
       }
     }
     const maxV = Math.max(1e-9, ...grid.flat());
@@ -698,7 +745,11 @@
           panel("What they watch", donut(cats.filter((x) => x.c === "movies" || x.c === "tv" || (x.c === "audiobooks" && showAudiobooks) || (x.c === "other" && x.items.length)).map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
         sessions(plays, T)].filter(Boolean));
     };
-    userSel.addEventListener("change", () => { setSetting(T, "user", userSel.value); setSetting(T, "profile", ""); state.page.users = 0; fillProfiles(); draw(); });
+    userSel.addEventListener("change", () => {
+      setSetting(T, "user", userSel.value); setSetting(T, "profile", ""); state.page.users = 0;
+      if (state.tableFilters) delete state.tableFilters.users; // another user's values differ
+      fillProfiles(); draw();
+    });
     profileSel.addEventListener("change", () => { setSetting(T, "profile", profileSel.value); state.page.users = 0; draw(); });
     fillProfiles();
     view.append(toolbar(
@@ -708,40 +759,199 @@
     draw();
   }
 
+  // ---------- session tables (Users and History) ----------
+  // Each column can filter the table: value columns by ticking values in
+  // the header menu or by clicking a cell, Title by text, Watched by a
+  // minimum. Filters last while the page is open, per table.
+  const FUNNEL = () => {
+    const icon = svg("svg", { viewBox: "0 0 16 16", width: 13, height: 13, "aria-hidden": "true" });
+    icon.append(svg("path", { d: "M2 3h12l-4.6 5.4V13l-2.8-1.4V8.4z", fill: "currentColor" }));
+    return icon;
+  };
+  function sessionColumns(showUser) {
+    const cols = [
+      { key: "started", label: "Started", cell: (p) => dateTimeFmt.format(new Date(p.started || p.ended)) },
+      { key: "who", label: showUser ? "User" : "Profile", kind: "values", value: (p) => (showUser ? who(p) : p.profile) || "(none)" },
+      { key: "title", label: "Title", kind: "text", cls: "title", cell: (p) => playTitle(p) },
+      { key: "type", label: "Type", kind: "values", value: (p) => CAT_LABEL[p.cat], mark: (p) => el("span", { class: "dot", style: `--c:${catColor(p.cat)}` }) },
+      { key: "stream", label: "Stream", kind: "values", value: (p) => STREAM_LABEL[p.stream], pill: (p) => streamColor(p.stream) },
+      { key: "watched", label: "Watched", kind: "min", cls: "num",
+        cell: (p) => (p.estimated ? "≈ " : "") + hours(p.watched) + (p.duration ? ` of ${hours(p.duration)}` : "") },
+      { key: "done", label: "Done", kind: "values", value: (p) => (p.completed ? "Yes" : "No") },
+    ];
+    if (state.features.clients) {
+      cols.push({ key: "client", label: "Client", kind: "values",
+        value: (p) => [p.client, { local: "Local", remote: "Remote" }[p.location]].filter(Boolean).join(" · ") || "Unknown" });
+    }
+    return cols;
+  }
+  const titleText = (p) => p._title || (p._title = playTitle(p).toLowerCase());
+
+  function filterPlays(plays, cols, f, skip) {
+    const text = f.text.trim().toLowerCase();
+    const active = cols.filter((c) => c.kind === "values" && c.key !== skip && f.values[c.key]);
+    const minSec = skip === "watched" ? 0 : f.min * 60;
+    if (!text && !active.length && !minSec) return plays;
+    return plays.filter((p) => (!text || titleText(p).includes(text)) && (!minSec || p.watched >= minSec) &&
+      active.every((c) => { const r = f.values[c.key]; return r.not !== r.set.has(c.value(p)); }));
+  }
+
+  // popover opens a small menu under an anchor; it closes on Escape, on a
+  // click elsewhere, or when another opens.
+  let openPop = null;
+  function popover(anchor, content) {
+    if (openPop) openPop.close();
+    const pop = el("div", { class: "popover", role: "dialog" }, content);
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${r.bottom + window.scrollY + 4}px`;
+    pop.style.left = `${Math.max(8, Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 8))}px`;
+    const onDown = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") { close(); anchor.focus(); } };
+    const close = () => {
+      pop.remove(); anchor.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey);
+      if (openPop && openPop.pop === pop) openPop = null;
+    };
+    document.addEventListener("pointerdown", onDown, true); document.addEventListener("keydown", onKey);
+    anchor.setAttribute("aria-expanded", "true");
+    openPop = { pop, close };
+    const first = pop.querySelector("input, button");
+    if (first) first.focus();
+    return close;
+  }
+
   function sessions(plays, pageKey) {
     plays = plays.slice().sort((a, b) => (b.started || b.ended) - (a.started || a.ended));
+    const showUser = pageKey !== "users";
+    const cols = sessionColumns(showUser);
+    if (!state.tableFilters) state.tableFilters = {};
+    const f = state.tableFilters[pageKey] || (state.tableFilters[pageKey] = { text: "", values: {}, min: 0 });
+    let rows = plays;
+
+    const count = el("h2");
+    const exportBtn = el("button", { type: "button", class: "small", text: "Export CSV", onclick: () => csv(rows) });
+    const search = el("input", { type: "search", class: "search", placeholder: "Filter titles…", "aria-label": "Filter by title", value: f.text });
+    let timer = 0;
+    search.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { f.text = search.value; changed(); }, 150); });
+    const chips = el("div", { class: "chips" });
     const box = el("div");
+
+    const changed = () => { state.page[pageKey] = 0; draw(); };
+    // A value filter is either "only these" or "all but these" (unticking
+    // from the full list), so values hidden by other filters aren't lost.
+    const setValues = (key, rule) => { if (!rule || (rule.not && !rule.set.size)) delete f.values[key]; else f.values[key] = rule; changed(); };
+    const only = (v) => ({ not: false, set: new Set([v]) });
+
+    const valuesMenu = (col, anchor) => {
+      // Counts reflect the other filters, so the menu shows what's left.
+      const counts = new Map();
+      for (const p of filterPlays(plays, cols, f, col.key)) { const v = col.value(p); counts.set(v, (counts.get(v) || 0) + 1); }
+      const values = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b));
+      const list = el("div", { class: "pop-list" });
+      const shown = (v) => { const r = f.values[col.key]; return !r || r.not !== r.set.has(v); };
+      const drawList = (q) => list.replaceChildren(...values.filter((v) => !q || v.toLowerCase().includes(q)).map((v) => {
+        const cb = el("input", { type: "checkbox" });
+        cb.checked = shown(v);
+        cb.addEventListener("change", () => {
+          const r = f.values[col.key] || { not: true, set: new Set() };
+          // In "all but" mode the set lists what's unticked; otherwise what's ticked.
+          if (r.not !== cb.checked) r.set.add(v); else r.set.delete(v);
+          setValues(col.key, r);
+        });
+        const onlyBtn = el("button", { type: "button", class: "only", text: "only", onclick: () => { setValues(col.key, only(v)); close(); } });
+        return el("label", { class: "pop-item" }, cb, el("span", { class: "v", title: v, text: v }), el("span", { class: "n", text: num(counts.get(v)) }), onlyBtn);
+      }));
+      const find = values.length > 8 ? el("input", { type: "search", class: "search", placeholder: `Find ${col.label.toLowerCase()}…`, "aria-label": `Find ${col.label}` }) : null;
+      if (find) find.addEventListener("input", () => drawList(find.value.trim().toLowerCase()));
+      drawList("");
+      const close = popover(anchor, [el("div", { class: "pop-title", text: `Filter ${col.label}` }), find, list,
+        el("div", { class: "pop-foot" },
+          el("button", { type: "button", class: "small link", text: "Show all", onclick: () => { setValues(col.key, null); close(); } }),
+          el("button", { type: "button", class: "small", text: "Done", onclick: () => close() }))].filter(Boolean));
+    };
+    const minMenu = (anchor) => {
+      const input = el("input", { type: "number", min: "0", step: "1", value: f.min || "", placeholder: "0", "aria-label": "Minimum minutes watched" });
+      const apply = (v) => { f.min = Math.max(0, Number(v) || 0); changed(); };
+      input.addEventListener("input", () => apply(input.value));
+      const close = popover(anchor, [el("div", { class: "pop-title", text: "Watched at least" }),
+        el("label", { class: "pop-min" }, input, "minutes"),
+        el("div", { class: "pop-presets" }, [1, 5, 10, 30, 60].map((m) => el("button", { type: "button", class: "small", text: `${m}m`,
+          onclick: () => { input.value = m; apply(m); } }))),
+        el("div", { class: "pop-foot" },
+          el("button", { type: "button", class: "small link", text: "Clear", onclick: () => { apply(0); close(); } }),
+          el("button", { type: "button", class: "small", text: "Done", onclick: () => close() }))]);
+    };
+
+    const drawChips = () => {
+      const list = [];
+      for (const c of cols) {
+        const r = f.values[c.key];
+        if (!r) continue;
+        const vals = [...r.set];
+        const shownVals = vals.length ? `${vals.slice(0, 3).join(", ")}${vals.length > 3 ? ` +${vals.length - 3}` : ""}` : "none";
+        list.push(el("span", { class: "chip" }, `${c.label}: ${r.not ? "not " : ""}${shownVals}`,
+          el("button", { type: "button", "aria-label": `Remove ${c.label} filter`, onclick: () => setValues(c.key, null) }, "×")));
+      }
+      if (f.min) list.push(el("span", { class: "chip" }, `Watched ≥ ${num(f.min)}m`,
+        el("button", { type: "button", "aria-label": "Remove watched filter", onclick: () => { f.min = 0; changed(); } }, "×")));
+      if (list.length || f.text) {
+        list.push(el("button", { type: "button", class: "small link", text: "Clear filters",
+          onclick: () => { f.text = ""; search.value = ""; f.values = {}; f.min = 0; changed(); } }));
+      }
+      chips.replaceChildren(...list);
+    };
+
+    const table = (page) => el("div", { class: "table-wrap" }, el("table", {},
+      el("thead", {}, el("tr", {}, cols.map((c) => {
+        const th = el("th", { class: c.cls === "num" ? "num" : null }, c.label);
+        if (c.kind === "values" || c.kind === "min") {
+          const on = c.kind === "min" ? f.min > 0 : Boolean(f.values[c.key]);
+          const b = el("button", { type: "button", class: "th-filter" + (on ? " on" : ""), "aria-label": `Filter ${c.label}`, "aria-haspopup": "dialog", "aria-expanded": "false" }, FUNNEL());
+          b.addEventListener("click", () => (c.kind === "min" ? minMenu(b) : valuesMenu(c, b)));
+          th.append(b);
+        }
+        return th;
+      }))),
+      el("tbody", {}, page.map((p) => el("tr", {}, cols.map((c) => {
+        if (c.kind !== "values") {
+          return el("td", { class: [c.cls, c.key === "watched" && p.estimated ? "est" : null].filter(Boolean).join(" ") || null,
+            title: c.key === "watched" && p.estimated ? "Estimated: recorded before Silo measured watch time" : null, text: c.cell(p) });
+        }
+        // Clicking a value shows only rows with that value; again clears it.
+        const v = c.value(p);
+        const r = f.values[c.key];
+        const isOnly = r && !r.not && r.set.size === 1 && r.set.has(v);
+        const inner = c.pill ? el("span", { class: "pill", style: `--c:${c.pill(p)}`, text: v }) : [c.mark ? c.mark(p) : null, v];
+        return el("td", {}, el("button", { type: "button", class: "cell-filter" + (c.key === "done" && v === "No" ? " muted" : ""),
+          title: isOnly ? `Show every ${c.label.toLowerCase()}` : `Show only ${v}`,
+          onclick: () => setValues(c.key, isOnly ? null : only(v)) }, inner));
+      }))))));
+
     const draw = () => {
-      const pages = Math.max(1, Math.ceil(plays.length / PAGE));
+      rows = filterPlays(plays, cols, f);
+      const filtered = rows.length !== plays.length;
+      count.textContent = filtered ? `Playback sessions (${num(rows.length)} of ${num(plays.length)})` : `Playback sessions (${num(plays.length)})`;
+      exportBtn.disabled = !rows.length;
+      exportBtn.textContent = filtered ? "Export filtered CSV" : "Export CSV";
+      drawChips();
+      const pages = Math.max(1, Math.ceil(rows.length / PAGE));
       state.page[pageKey] = Math.min(state.page[pageKey] || 0, pages - 1);
       const at = state.page[pageKey];
       const go = (d) => { state.page[pageKey] = at + d; draw(); };
-      box.replaceChildren(...[plays.length ? playTable(plays.slice(at * PAGE, (at + 1) * PAGE), pageKey !== "users") : empty(),
+      box.replaceChildren(...[
+        rows.length ? table(rows.slice(at * PAGE, (at + 1) * PAGE)) : empty(plays.length ? "No sessions match these filters." : undefined),
         pages > 1 ? el("div", { class: "pager" },
           el("button", { type: "button", class: "small", disabled: at === 0, onclick: () => go(-1), text: "Newer" }),
-          el("span", { text: `Page ${at + 1} of ${pages}` }),
+          el("span", { text: `Page ${at + 1} of ${num(pages)}` }),
           el("button", { type: "button", class: "small", disabled: at >= pages - 1, onclick: () => go(1), text: "Older" })) : null,
-        plays.some((p) => p.estimated) ? el("p", { class: "note", text: "≈ marks plays recorded before Silo measured watch time; their watch time is an estimate." }) : null].filter(Boolean));
+        rows.some((p) => p.estimated) ? el("p", { class: "note", text: "≈ marks plays recorded before Silo measured watch time; their watch time is an estimate." }) : null].filter(Boolean));
     };
     draw();
-    return panel([`Playback sessions (${num(plays.length)})`, el("button", { type: "button", class: "small", onclick: () => csv(plays), disabled: !plays.length, text: "Export CSV" })], box);
-  }
-
-  function playTable(plays, showUser) {
-    const showClient = state.features.clients;
-    const head = ["Started", showUser ? "User" : "Profile", "Title", "Type", "Stream", "Watched", "Done", showClient ? "Client" : null].filter(Boolean);
-    return el("div", { class: "table-wrap" }, el("table", {},
-      el("thead", {}, el("tr", {}, head.map((h) => el("th", { class: h === "Watched" ? "num" : null, text: h })))),
-      el("tbody", {}, plays.map((p) => el("tr", {},
-        el("td", { text: dateTimeFmt.format(new Date(p.started || p.ended)) }),
-        el("td", { text: showUser ? who(p) : p.profile }),
-        el("td", { class: "title", text: playTitle(p) }),
-        el("td", {}, el("span", { class: "dot", style: `--c:${catColor(p.cat)}` }), CAT_LABEL[p.cat]),
-        el("td", {}, el("span", { class: "pill", style: `--c:${streamColor(p.stream)}`, text: STREAM_LABEL[p.stream] })),
-        el("td", { class: "num" + (p.estimated ? " est" : ""), title: p.estimated ? "Estimated: recorded before Silo measured watch time" : null,
-          text: (p.estimated ? "≈ " : "") + hours(p.watched) + (p.duration ? ` of ${hours(p.duration)}` : "") }),
-        el("td", { text: p.completed ? "Yes" : "" }),
-        showClient ? el("td", { text: [p.client, { local: "Local", remote: "Remote" }[p.location]].filter(Boolean).join(" · ") }) : null)))));
+    return el("section", { class: "panel" },
+      el("div", { class: "panel-head" }, count, exportBtn),
+      el("div", { class: "table-tools" }, search, chips),
+      box);
   }
 
   // ---------- Breakdown tab ----------

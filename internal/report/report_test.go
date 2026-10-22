@@ -1,6 +1,8 @@
 package report
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +21,19 @@ import (
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func ptr[T any](v T) *T { return &v }
+
+func gunzip(t *testing.T, b []byte) []byte {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("not gzip: %v", err)
+	}
+	out, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
 
 func entry(id string, ended time.Time, watched float64, played *float64) silo.HistoryEntry {
 	return silo.HistoryEntry{SessionID: id, UserID: "1", Username: "laura", MediaItemID: "m-" + id, MediaTitle: "Title " + id,
@@ -150,7 +165,7 @@ func TestEncodeChunksSplitsAndIndexes(t *testing.T) {
 			t.Errorf("chunk %d is %d bytes, over the host's response budget", i, len(b))
 		}
 		var c chunk
-		if err := json.Unmarshal(b, &c); err != nil {
+		if err := json.Unmarshal(gunzip(t, b), &c); err != nil {
 			t.Fatal(err)
 		}
 		if c.Index != i || c.Count != 2 || c.Snapshot != "snap" || len(c.Columns) != len(rowColumns) {
@@ -162,7 +177,7 @@ func TestEncodeChunksSplitsAndIndexes(t *testing.T) {
 		t.Fatalf("chunks hold %d plays, want %d", total, len(plays))
 	}
 	var c chunk
-	_ = json.Unmarshal(chunks[0], &c)
+	_ = json.Unmarshal(gunzip(t, chunks[0]), &c)
 	col := map[string]int{}
 	for i, name := range c.Columns {
 		col[name] = i
@@ -223,7 +238,7 @@ func TestHandlerServesChunksFromOneSnapshot(t *testing.T) {
 
 	resp, _ := h.Handle(t.Context(), request("/data", "admin", map[string]any{"chunk": "0"}))
 	var first chunk
-	if err := json.Unmarshal(resp.GetBody(), &first); err != nil || first.Snapshot == "" {
+	if err := json.Unmarshal(gunzip(t, resp.GetBody()), &first); err != nil || first.Snapshot == "" {
 		t.Fatalf("first chunk: %s", resp.GetBody())
 	}
 	// A sync lands while the page loads; the snapshot it started from still
@@ -231,7 +246,7 @@ func TestHandlerServesChunksFromOneSnapshot(t *testing.T) {
 	store.Upsert([]Play{PlayFrom(entry("b", base.Add(time.Minute), 60, ptr(60.0)))})
 	resp, _ = h.Handle(t.Context(), request("/data", "admin", map[string]any{"chunk": "0", "snapshot": first.Snapshot}))
 	var again chunk
-	_ = json.Unmarshal(resp.GetBody(), &again)
+	_ = json.Unmarshal(gunzip(t, resp.GetBody()), &again)
 	if again.Snapshot != first.Snapshot || len(again.Plays) != 1 {
 		t.Fatalf("snapshot changed under the page: %s", resp.GetBody())
 	}
@@ -334,7 +349,7 @@ func TestOptionsHideShortAndIgnoredPlays(t *testing.T) {
 	h.SetOptions(Options{MinSeconds: 30, Ignore: rules, Colors: colors, Palette: palette})
 	resp, _ := h.Handle(t.Context(), request("/data", "admin", map[string]any{"chunk": "0"}))
 	var c chunk
-	if err := json.Unmarshal(resp.GetBody(), &c); err != nil {
+	if err := json.Unmarshal(gunzip(t, resp.GetBody()), &c); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.Plays) != 2 || c.Features.Hidden != 3 || c.Features.MinSeconds != 30 || c.Features.IgnoreRules != 2 {
@@ -386,5 +401,41 @@ func TestColorsSaveAndLoad(t *testing.T) {
 	get := request("/settings", "admin", nil)
 	if r, _ := again.Handle(t.Context(), get); r.GetStatusCode() != 405 {
 		t.Fatalf("GET colors: %d", r.GetStatusCode())
+	}
+}
+
+func TestEncodeChunksSplitsWhenCompressedChunksAreTooBig(t *testing.T) {
+	defer func(old int) { maxChunkBytes = old }(maxChunkBytes)
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	plays := make([]Play, 30000)
+	for i := range plays {
+		// Distinct titles so the chunks don't compress to nothing.
+		p := PlayFrom(entry(fmt.Sprint(i), base.Add(-time.Duration(i)*time.Minute), 60, ptr(42.0)))
+		p.Title = fmt.Sprintf("Title %x %d", i*7919, i)
+		plays[i] = p
+	}
+	whole, err := encodeChunks("s", plays, Status{}, features{}, nil, base)
+	if err != nil || len(whole) != 1 {
+		t.Fatalf("one chunk expected: %d %v", len(whole), err)
+	}
+	maxChunkBytes = len(whole[0]) / 3
+	split, err := encodeChunks("s", plays, Status{}, features{}, nil, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for i, b := range split {
+		if len(b) > maxChunkBytes {
+			t.Fatalf("chunk %d still %d bytes, limit %d", i, len(b), maxChunkBytes)
+		}
+		var c chunk
+		_ = json.Unmarshal(gunzip(t, b), &c)
+		if c.Count != len(split) || c.Index != i {
+			t.Fatalf("chunk %d header %d/%d", i, c.Index, c.Count)
+		}
+		total += len(c.Plays)
+	}
+	if len(split) < 3 || total != len(plays) {
+		t.Fatalf("%d chunks with %d plays", len(split), total)
 	}
 }
