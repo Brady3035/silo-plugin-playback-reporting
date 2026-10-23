@@ -92,6 +92,7 @@ select:disabled { opacity: .6; }
 .chart text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chart .grid line { stroke: var(--line); }
 .chart .col:hover rect:not([fill="transparent"]) { opacity: .85; }
+.chart .hit.pick { cursor: pointer; }
 .legend, .donut-keys { list-style: none; padding: 0; margin: 10px 0 0; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; background: var(--c); vertical-align: -1px; flex: none; }

@@ -467,7 +467,16 @@
       }
       return i < list.length ? i : -1;
     };
-    return { unit, list, start, column };
+    // end is where column i stops (exclusive): the next column's start.
+    const end = (i) => {
+      if (i + 1 < list.length) return list[i + 1];
+      const e = new Date(list[i]);
+      if (unit === "day") e.setDate(e.getDate() + 1);
+      else if (unit === "week") e.setDate(e.getDate() + 7);
+      else e.setMonth(e.getMonth() + 1);
+      return e.getTime();
+    };
+    return { unit, list, start, column, end };
   }
 
   function columnLabel(unit, ms) { return unit === "month" ? monthFmt.format(ms) : shortDate.format(ms); }
@@ -479,12 +488,14 @@
 
   // stackedColumns draws one column per bucket with a stack per series.
   // Hovering a column dims the others and lists its series; hovering a
-  // legend item dims the other series. Returns [chart, legend].
+  // legend item dims the other series. With pick, clicking a column that
+  // has plays calls pick(i); on touch the first tap shows the tooltip and a
+  // second tap on the same column picks it. Returns [chart, legend].
   // The column chart is drawn at its real pixel width (and redrawn when that
   // changes) so text and bars stay their designed size on any screen,
   // instead of stretching a fixed viewBox.
   let lastChartWidth = 760;
-  function stackedColumns(b, series, fmt, what) {
+  function stackedColumns(b, series, fmt, what, pick) {
     const totals = b.list.map((_, i) => series.reduce((s, x) => s + x.values[i], 0));
     // Gridlines land on round values: whole minutes/hours for watch time,
     // 1-2-2.5-5 steps for counts.
@@ -538,14 +549,27 @@
           base += v;
         });
         // A full-height hit area so short columns are easy to hover.
-        const hit = svg("rect", { class: "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
+        const pickable = pick && totals[i] > 0;
+        const hit = svg("rect", { class: pickable ? "hit pick" : "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
         col.append(hit);
+        if (pickable) {
+          // Registered before hover() so it sees whether this column's
+          // tooltip was already up when the finger came down.
+          let touchArmed = false, touch = false;
+          hit.addEventListener("pointerdown", (e) => { touch = e.pointerType !== "mouse"; touchArmed = tipOwner === hit; });
+          hit.addEventListener("click", () => {
+            if (touch && !touchArmed) return;
+            hideTip();
+            pick(i);
+          });
+        }
         hover(hit, () => {
           const rows = series.map((s) => ({ name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
           return tipRows(bucketTitle(b.unit, t), [
             { name: "Total", value: fmt(totals[i]), strong: true },
             ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]) })),
-          ], rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played");
+          ], [rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played",
+            pickable ? `${matchMedia("(hover: none)").matches ? "Tap again" : "Click"} to see these plays in History` : null].filter(Boolean).join(" · ") || null);
         }, () => {
           svgEl.classList.add("hovering"); col.classList.add("active");
           band.setAttribute("x", L + i * step); band.setAttribute("visibility", "visible");
@@ -740,7 +764,8 @@
           tile("Plays", num(plays.length)),
           tile(split ? "Active profiles" : "Active users", num(people.length)),
           tile("Transcoded", pct(plays.filter((p) => p.stream === "transcode").length, plays.length), "of plays")),
-        panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what)),
+        panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what,
+          (i) => openHistory(Math.max(b.list[i], from), Math.min(b.end(i), to), setting(T, "cat", "all")))),
         el("div", { class: "grid2" },
           panel(split ? "By profile" : "By user", barList(people, (g) => (split ? who(g.items[0]) : g.items[0].user), (g) => fmt(g.value),
             (g) => `${num(g.plays)} plays · ${hours(g.time)}`, stack === "user" ? (g) => colorOf.get(g.key) || "var(--c-other)" : null, 15,
@@ -799,6 +824,24 @@
     render();
     window.scrollTo(0, 0);
     const tab = $("tab-users");
+    if (tab) tab.focus({ preventScroll: true });
+  }
+
+  // openHistory shows the History tab over [from, to) — one chart column,
+  // whether that's a day, a week or a month — with the same media filter
+  // the chart had. Both ends are local midnights, so the custom range's
+  // inclusive "to" date is the day before `to`.
+  function openHistory(from, to, cat) {
+    setSetting("history", "range", "custom");
+    setSetting("history", "from", isoDay(from));
+    setSetting("history", "to", isoDay(to - 1));
+    setSetting("history", "cat", cat);
+    if (state.tableFilters) delete state.tableFilters.history;
+    state.page.history = 0;
+    state.tab = "history"; remember("tab", "history");
+    render();
+    window.scrollTo(0, 0);
+    const tab = $("tab-history");
     if (tab) tab.focus({ preventScroll: true });
   }
 
