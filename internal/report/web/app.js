@@ -31,7 +31,41 @@
       if (ref.origin === location.origin && ref.pathname.startsWith(root + "/admin")) href = ref.pathname + ref.search;
     } catch (_) { /* no referrer */ }
     if (back) back.href = href;
+    if (back) warmOnIntent(back);
   })();
+
+  // Start loading the admin page as soon as the pointer or keyboard focus
+  // lands on the back link, so the click lands on a page that is already
+  // (or nearly) ready. Chromium gets a full prerender via speculation rules;
+  // other browsers get a plain prefetch of the document. Done once per page.
+  function warmOnIntent(link) {
+    let warmed = false;
+    const warm = () => {
+      if (warmed) return;
+      warmed = true;
+      const url = link.href;
+      try {
+        if (HTMLScriptElement.supports && HTMLScriptElement.supports("speculationrules")) {
+          const rules = document.createElement("script");
+          rules.type = "speculationrules";
+          rules.textContent = JSON.stringify({ prerender: [{ source: "list", urls: [url] }] });
+          document.head.append(rules);
+          return;
+        }
+      } catch (_) { /* fall through to prefetch */ }
+      const hint = document.createElement("link");
+      hint.rel = "prefetch";
+      hint.href = url;
+      document.head.append(hint);
+    };
+    let timer = 0;
+    // A short delay skips pointers that are just passing over the link.
+    link.addEventListener("pointerenter", () => { timer = setTimeout(warm, 65); });
+    link.addEventListener("pointerleave", () => clearTimeout(timer));
+    link.addEventListener("pointerdown", warm);
+    link.addEventListener("touchstart", warm, { passive: true });
+    link.addEventListener("focus", warm);
+  }
   if (!main) return; // setup page
 
   const state = {
