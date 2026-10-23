@@ -289,7 +289,101 @@
     return settings[k];
   }
   const settings = {};
-  function setSetting(tab, key, value) { settings[`${tab}.${key}`] = value; remember(`${tab}.${key}`, value); }
+  function setSetting(tab, key, value) { settings[`${tab}.${key}`] = value; remember(`${tab}.${key}`, value); syncURL(); }
+
+  // ---------- address bar ----------
+  // The open tab, its settings and its table filters live in the URL hash,
+  // so the browser's Back and Forward move between views and a view can be
+  // bookmarked. Moving to another tab adds a history entry; changing a
+  // setting on the same tab only updates the current one.
+  const URL_KEYS = {
+    activity: ["range", "from", "to", "cat", "measure", "stack", "profiles"],
+    users: ["user", "profile", "range", "from", "to"],
+    breakdown: ["range", "from", "to", "measure", "chart", "limit", "user"],
+    clients: ["range", "from", "to"],
+    history: ["range", "from", "to", "cat"],
+  };
+  const TABLE_TABS = ["users", "history"];
+  function packFilters(f) {
+    if (!f) return null;
+    const out = {};
+    if (f.text) out.t = f.text;
+    if (f.min) out.m = f.min;
+    const v = Object.entries(f.values || {}).map(([k, r]) => [k, r.not ? 1 : 0, [...r.set]]);
+    if (v.length) out.v = v;
+    if (f.extra && f.extra.length) out.x = f.extra;
+    if (f.origin) out.o = f.origin;
+    return Object.keys(out).length ? out : null;
+  }
+  function unpackFilters(o) {
+    const f = { text: "", values: {}, min: 0, extra: [] };
+    if (!o || typeof o !== "object") return f;
+    if (typeof o.t === "string") f.text = o.t;
+    if (Number(o.m) > 0) f.min = Number(o.m);
+    if (Array.isArray(o.v)) for (const [k, not, set] of o.v) if (typeof k === "string" && Array.isArray(set)) f.values[k] = { not: Boolean(not), set: new Set(set.map(String)) };
+    if (Array.isArray(o.x)) f.extra = o.x.filter((x) => x && typeof x.k === "string" && EXTRA[x.k]);
+    if (o.o && typeof o.o === "object" && typeof o.o.tab === "string") f.origin = o.o;
+    return f;
+  }
+  function viewHash() {
+    const tab = state.tab, q = new URLSearchParams();
+    for (const k of URL_KEYS[tab] || []) if (`${tab}.${k}` in settings) q.set(k, settings[`${tab}.${k}`]);
+    const packed = TABLE_TABS.includes(tab) && state.tableFilters ? packFilters(state.tableFilters[tab]) : null;
+    if (packed) q.set("f", JSON.stringify(packed));
+    const s = q.toString();
+    return "#" + tab + (s ? "?" + s : "");
+  }
+  // readHash applies a URL's view; it returns false when there is none.
+  function readHash() {
+    const h = location.hash.slice(1);
+    if (!h) return false;
+    const at = h.indexOf("?"), tab = at < 0 ? h : h.slice(0, at);
+    if (!URL_KEYS[tab]) return false;
+    const q = new URLSearchParams(at < 0 ? "" : h.slice(at + 1));
+    restoring = true;
+    try {
+      for (const k of URL_KEYS[tab]) if (q.has(k)) setSetting(tab, k, q.get(k));
+      if (TABLE_TABS.includes(tab)) {
+        if (!state.tableFilters) state.tableFilters = {};
+        let packed = null;
+        try { packed = JSON.parse(q.get("f") || "null"); } catch (_) { /* bad link */ }
+        state.tableFilters[tab] = unpackFilters(packed);
+        state.page[tab] = 0;
+      }
+      state.tab = tab; remember("tab", tab);
+    } finally { restoring = false; }
+    return true;
+  }
+  let restoring = false, syncQueued = false, urlReady = false;
+  function syncURL() {
+    if (!urlReady || restoring || syncQueued) return;
+    syncQueued = true;
+    queueMicrotask(() => {
+      syncQueued = false;
+      const h = viewHash();
+      if (h !== location.hash) history.replaceState(history.state, "", h);
+    });
+  }
+  // navigate moves to another view and adds a Back step for it. prepare
+  // sets that view up (its settings and filters) before it draws.
+  function navigate(tab, prepare, entry) {
+    if (openPop) openPop.close();
+    hideTip();
+    if (prepare) prepare();
+    state.tab = tab; remember("tab", tab);
+    render();
+    history.pushState(entry || null, "", viewHash());
+    if (!prepare) return; // a plain tab switch
+    window.scrollTo(0, 0);
+    const t = $("tab-" + tab);
+    if (t) t.focus({ preventScroll: true });
+  }
+  window.addEventListener("popstate", () => {
+    if (!urlReady) return;
+    if (openPop) openPop.close();
+    hideTip();
+    if (readHash()) render();
+  });
 
   function selectControl(label, tab, key, options, fallback, onchange) {
     const s = el("select", {}, options.map(([v, t]) => el("option", { value: v, text: t })));
@@ -400,20 +494,57 @@
     tipEl.hidden = false;
     placeTip(e.clientX, e.clientY);
   }
-  function hideTip(owner) { if (!owner || tipOwner === owner) { tipEl.hidden = true; tipOwner = null; } }
+  // touchOff undoes a touch-shown highlight when its tooltip goes away (a
+  // lifted finger doesn't count as leaving; the next tap elsewhere does).
+  let touchOff = null;
+  function hideTip(owner) {
+    if (owner && tipOwner !== owner) return;
+    tipEl.hidden = true; tipOwner = null;
+    if (touchOff) { const f = touchOff; touchOff = null; f(); }
+  }
   // hover wires a node to the tooltip plus optional enter/leave effects.
+  // A touch also sends enter/move just before its pointerdown; those are
+  // left to pointerdown, so a first tap reads as a first tap.
   function hover(node, content, on, off) {
-    node.addEventListener("pointerenter", (e) => { if (on) on(); showTip(node, content, e); });
-    node.addEventListener("pointermove", (e) => showTip(node, content, e));
-    node.addEventListener("pointerleave", () => { if (off) off(); hideTip(node); });
-    node.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") { if (on) on(); showTip(node, content, e); } });
+    node.addEventListener("pointerenter", (e) => { if (e.pointerType === "touch") return; if (on) on(); showTip(node, content, e); });
+    node.addEventListener("pointermove", (e) => { if (e.pointerType !== "touch") showTip(node, content, e); });
+    node.addEventListener("pointerleave", (e) => { if (e.pointerType === "touch") return; if (off) off(); hideTip(node); });
+    node.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse") return;
+      if (tipOwner !== node) hideTip();
+      if (on) on(); showTip(node, content, e); touchOff = off || null;
+    });
+  }
+  // refreshTip redraws an open tooltip whose content changed under the
+  // pointer (a different segment of the same column).
+  function refreshTip(owner, content) { if (tipOwner === owner && !tipEl.hidden) tipEl.replaceChildren(...[].concat(content())); }
+  // tipBeside shows the tooltip next to an element, for keyboard focus.
+  function tipBeside(owner, content, box) {
+    tipOwner = null;
+    showTip(owner, content, { clientX: box.right, clientY: box.top + Math.min(box.height / 2, 40) });
   }
   window.addEventListener("scroll", () => hideTip(), { passive: true });
   document.addEventListener("pointerdown", (e) => { if (tipOwner && !tipOwner.contains(e.target)) hideTip(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !tipEl.hidden) hideTip(); });
+
+  // clickToOpen makes a chart mark open something. A mouse click opens it
+  // straight away; on touch the first tap shows the tooltip and a second
+  // tap on the same mark opens it. Wire it before hover() so it can see
+  // whether the mark's tooltip was already up when the finger came down.
+  function clickToOpen(node, open) {
+    let touch = false, armed = false;
+    node.addEventListener("pointerdown", (e) => { touch = e.pointerType !== "mouse"; armed = tipOwner === node; });
+    node.addEventListener("click", (e) => {
+      if (touch && !armed) return;
+      hideTip();
+      open(e);
+    });
+  }
+  const tapWord = () => (matchMedia("(hover: none)").matches ? "Tap again" : "Click");
 
   function tipRows(title, rows, foot) {
     return [el("div", { class: "tip-title", text: title }),
-      el("table", { class: "tip-rows" }, rows.map((r) => el("tr", { class: r.strong ? "strong" : null },
+      el("table", { class: "tip-rows" }, rows.map((r) => el("tr", { class: [r.strong ? "strong" : null, r.on ? "on" : null].filter(Boolean).join(" ") || null },
         el("td", {}, r.color ? el("span", { class: "sw", style: `--c:${r.color}` }) : null, r.name),
         el("td", { class: "v", text: r.value }), r.extra !== undefined ? el("td", { class: "x", text: r.extra }) : null))),
       foot ? el("div", { class: "tip-foot", text: foot }) : null].filter(Boolean);
@@ -489,8 +620,11 @@
   // stackedColumns draws one column per bucket with a stack per series.
   // Hovering a column dims the others and lists its series; hovering a
   // legend item dims the other series. With pick, clicking a column that
-  // has plays calls pick(i); on touch the first tap shows the tooltip and a
-  // second tap on the same column picks it. Returns [chart, legend].
+  // has plays calls pick(i, si): si is the series segment under the
+  // pointer, or -1 for the column as a whole (on touch, the first tap shows
+  // the tooltip and a second tap opens it). The chart can also be used
+  // from the keyboard: arrows move between columns, up/down between a
+  // column's segments, Enter opens. Returns [chart, legend].
   // The column chart is drawn at its real pixel width (and redrawn when that
   // changes) so text and bars stay their designed size on any screen,
   // instead of stretching a fixed viewBox.
@@ -513,8 +647,52 @@
     })();
     const ticks = Math.max(1, Math.ceil(rawMax / tickStep - 1e-9));
     const maxV = ticks * tickStep;
-    const wrap = el("div", { class: "chart" });
-    let root = null, focused = -1, drawnW = 0;
+    const unitWord = b.unit === "day" ? "days" : b.unit + "s";
+    const wrap = el("div", { class: "chart", tabindex: "0", role: "group",
+      "aria-label": `${what} per ${b.unit}. Arrow keys move between ${unitWord}${pick ? "; up and down pick a segment; Enter opens it in History" : ""}.` });
+    const live = el("div", { class: "sr", "aria-live": "polite" });
+    let root = null, focused = -1, drawnW = 0, geo = null;
+    // The column and segment (-1: the whole column) being pointed at, and
+    // whether the keyboard is doing the pointing.
+    let cur = -1, seg = -1, kbd = false;
+    const canPick = (i) => Boolean(pick) && totals[i] > 0;
+    const target = () => (seg >= 0 ? series[seg].name : "everything");
+    const tipFor = (i) => () => {
+      const rows = series.map((s, si) => ({ si, name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
+      const how = !canPick(i) ? null : kbd ? `Enter for ${target()} in History · ↑↓ segments` : `${tapWord()} for ${target()} in History`;
+      return tipRows(bucketTitle(b.unit, b.list[i]), [
+        { name: "Total", value: fmt(totals[i]), strong: true },
+        ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]), on: r.si === seg })),
+      ], [rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played", how].filter(Boolean).join(" · ") || null);
+    };
+    const activate = (i) => {
+      if (!geo) return;
+      if (cur >= 0 && cur !== i && geo.cols[cur]) geo.cols[cur].g.classList.remove("active", "has-seg");
+      cur = i;
+      const c = geo.cols[i];
+      geo.svgEl.classList.add("hovering"); c.g.classList.add("active");
+      geo.band.setAttribute("x", geo.L + i * geo.step); geo.band.setAttribute("visibility", "visible");
+      markSeg();
+    };
+    const deactivate = () => {
+      if (!geo) return;
+      geo.svgEl.classList.remove("hovering");
+      for (const c of geo.cols) c.g.classList.remove("active", "has-seg");
+      geo.band.setAttribute("visibility", "hidden");
+    };
+    const markSeg = () => {
+      const c = geo && geo.cols[cur];
+      if (!c) return;
+      c.g.classList.toggle("has-seg", seg >= 0);
+      for (const r of c.g.querySelectorAll("rect[data-s]")) r.classList.toggle("seg", Number(r.dataset.s) === seg);
+    };
+    // segAt finds the segment under a pointer's y, or -1 above the stack.
+    const segAt = (i, clientY) => {
+      const box = geo.svgEl.getBoundingClientRect();
+      const yy = (clientY - box.top) * (geo.H / (box.height || geo.H));
+      const hitSeg = geo.cols[i].segs.find((s) => yy >= s.y0 - 1 && yy <= s.y1 + 1);
+      return hitSeg ? hitSeg.si : -1;
+    };
     const draw = (W) => {
       W = Math.max(280, Math.round(W));
       if (W === drawnW) return;
@@ -534,56 +712,103 @@
       svgEl.append(grid);
       const band = svg("rect", { class: "band", x: 0, y: T, width: step, height: H - B - T, visibility: "hidden" });
       svgEl.append(band);
+      geo = { svgEl, band, L, step, H, cols: [] };
       // Roughly one date label per 80px keeps them from colliding.
       const labelEvery = Math.max(1, Math.ceil(b.list.length / Math.max(2, Math.floor((W - L) / 80))));
       b.list.forEach((t, i) => {
         let base = 0;
         const x = L + i * step + (step - bw) / 2;
         const col = svg("g", { class: "col" });
+        const segs = [];
         series.forEach((s, si) => {
           const v = s.values[i];
           if (v > 0) {
             const top = y(base + v), h = Math.max(0.5, y(base) - top);
             col.append(svg("rect", { x, y: top, width: bw, height: h, fill: s.color, "data-s": si, rx: Math.min(3, bw / 4) }));
+            segs.push({ si, y0: top, y1: top + h });
           }
           base += v;
         });
         // A full-height hit area so short columns are easy to hover.
-        const pickable = pick && totals[i] > 0;
-        const hit = svg("rect", { class: pickable ? "hit pick" : "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
+        const hit = svg("rect", { class: canPick(i) ? "hit pick" : "hit", x: L + i * step, y: T, width: step, height: H - B - T, fill: "transparent" });
         col.append(hit);
-        if (pickable) {
-          // Registered before hover() so it sees whether this column's
-          // tooltip was already up when the finger came down.
-          let touchArmed = false, touch = false;
-          hit.addEventListener("pointerdown", (e) => { touch = e.pointerType !== "mouse"; touchArmed = tipOwner === hit; });
-          hit.addEventListener("click", () => {
-            if (touch && !touchArmed) return;
-            hideTip();
-            pick(i);
-          });
-        }
-        hover(hit, () => {
-          const rows = series.map((s) => ({ name: s.name, v: s.values[i], color: s.color })).filter((r) => r.v > 0).sort((a, c) => c.v - a.v);
-          return tipRows(bucketTitle(b.unit, t), [
-            { name: "Total", value: fmt(totals[i]), strong: true },
-            ...rows.slice(0, 12).map((r) => ({ name: r.name, value: fmt(r.v), color: r.color, extra: pct(r.v, totals[i]) })),
-          ], [rows.length > 12 ? `+${rows.length - 12} more` : rows.length ? null : "Nothing played",
-            pickable ? `${matchMedia("(hover: none)").matches ? "Tap again" : "Click"} to see these plays in History` : null].filter(Boolean).join(" · ") || null);
-        }, () => {
-          svgEl.classList.add("hovering"); col.classList.add("active");
-          band.setAttribute("x", L + i * step); band.setAttribute("visibility", "visible");
-        }, () => {
-          svgEl.classList.remove("hovering"); col.classList.remove("active"); band.setAttribute("visibility", "hidden");
+        geo.cols.push({ g: col, hit, segs });
+        if (canPick(i)) clickToOpen(hit, (e) => pick(i, segAt(i, e.clientY)));
+        const point = (e) => {
+          kbd = false;
+          const s = segAt(i, e.clientY), changed = cur !== i || s !== seg;
+          seg = s; activate(i);
+          if (changed) refreshTip(hit, tipFor(i));
+          showTip(hit, tipFor(i), e);
+        };
+        hit.addEventListener("pointerenter", (e) => { if (e.pointerType !== "touch") point(e); });
+        hit.addEventListener("pointermove", (e) => { if (e.pointerType !== "touch") point(e); });
+        hit.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse") return;
+          if (tipOwner !== hit) hideTip();
+          point(e); touchOff = deactivate;
         });
+        hit.addEventListener("pointerleave", (e) => { if (e.pointerType === "touch") return; deactivate(); hideTip(hit); if (keyFocused()) showKeyed(); });
         svgEl.append(col);
         if (i % labelEvery === 0) svgEl.append(svg("text", { x: x + bw / 2, y: H - 7, "text-anchor": "middle" }, columnLabel(b.unit, t)));
       });
       if (root) hideTip();
       root = svgEl;
-      wrap.replaceChildren(root);
+      wrap.replaceChildren(root, live);
       applyFocus();
+      if (keyFocused() && cur >= 0) showKeyed();
     };
+    // ---- keyboard ----
+    // Clicking a column also focuses the chart; only keyboard focus shows
+    // the keyboard tooltip.
+    const keyFocused = () => {
+      if (document.activeElement !== wrap) return false;
+      try { return wrap.matches(":focus-visible"); } catch (_) { return true; }
+    };
+    const showKeyed = () => {
+      if (!geo || cur < 0 || !geo.cols[cur]) return;
+      kbd = true;
+      activate(cur);
+      tipBeside(wrap, tipFor(cur), geo.cols[cur].hit.getBoundingClientRect());
+      const v = seg >= 0 ? `, ${series[seg].name} ${fmt(series[seg].values[cur])}` : "";
+      live.textContent = `${bucketTitle(b.unit, b.list[cur])}: ${fmt(totals[cur])}${v}`;
+    };
+    wrap.addEventListener("focus", () => {
+      if (!keyFocused()) return;
+      if (cur < 0 || cur >= b.list.length) {
+        cur = b.list.length - 1;
+        while (cur > 0 && !(totals[cur] > 0)) cur--;
+        seg = -1;
+      }
+      showKeyed();
+    });
+    wrap.addEventListener("blur", () => { deactivate(); hideTip(wrap); kbd = false; });
+    wrap.addEventListener("keydown", (e) => {
+      if (e.target !== wrap || cur < 0) return;
+      const n = b.list.length;
+      let i = cur;
+      if (e.key === "ArrowRight") i = Math.min(n - 1, cur + 1);
+      else if (e.key === "ArrowLeft") i = Math.max(0, cur - 1);
+      else if (e.key === "Home") i = 0;
+      else if (e.key === "End") i = n - 1;
+      else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        // Cycle through the whole column, then each segment bottom to top.
+        const order = [-1, ...geo.cols[cur].segs.map((s) => s.si)];
+        const at = order.indexOf(seg);
+        seg = order[(at + (e.key === "ArrowUp" ? 1 : order.length - 1)) % order.length];
+        e.preventDefault();
+        showKeyed();
+        return;
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (canPick(cur)) { hideTip(); pick(cur, seg); }
+        return;
+      } else return;
+      e.preventDefault();
+      if (i !== cur) seg = -1;
+      cur = i;
+      showKeyed();
+    });
     const applyFocus = () => {
       if (!root) return;
       root.classList.toggle("focusing", focused >= 0);
@@ -607,9 +832,12 @@
   }
 
   // donut shows shares of a whole; slices are [{name, value, color, sub}].
-  // Slices and their legend rows highlight each other on hover.
+  // Slices and their legend rows highlight each other on hover. With
+  // opts.open(i) and opts.hint(i), a slice (or its legend row) opens
+  // something; slices whose hint is empty don't.
   function donut(slices, center, centerSub, fmt, opts) {
     const o = opts || {};
+    const hintOf = (i) => (o.open && o.hint ? o.hint(i) : null);
     const total = slices.reduce((s, x) => s + x.value, 0);
     const size = o.size || 160, C = size / 2, R = C - 6, r = R * (o.pie ? 0 : 0.64);
     const root = svg("svg", { viewBox: `0 0 ${size} ${size}`, class: "donut" + (o.pie ? " pie" : ""), style: `width:${size}px;height:${size}px`,
@@ -621,7 +849,8 @@
       nodes.forEach((n, j) => n && n.classList.toggle("on", j === i));
       [...keysEl.children].forEach((li, j) => li.classList.toggle("on", j === i));
     };
-    const tipFor = (s) => () => tipRows(s.name, [{ name: "Share", value: pct(s.value, total), strong: true }], s.sub || fmt(s.value));
+    const tipFor = (s, i) => () => tipRows(s.name, [{ name: "Share", value: pct(s.value, total), strong: true }],
+      [s.sub || fmt(s.value), hintOf(i) ? `${tapWord()} to ${hintOf(i)}` : null].filter(Boolean).join(" · "));
     if (total <= 0) {
       root.append(svg("circle", { cx: C, cy: C, r: (R + r) / 2, fill: "none", stroke: "var(--line)", "stroke-width": R - r }));
     } else {
@@ -648,7 +877,8 @@
           node.style.setProperty("--dy", (Math.sin(mid) * 4).toFixed(2) + "px");
         }
         node.classList.add("slice");
-        hover(node, tipFor(s), () => focus(i), () => focus(-1));
+        if (hintOf(i)) { node.classList.add("pick"); clickToOpen(node, () => o.open(i)); }
+        hover(node, tipFor(s, i), () => focus(i), () => focus(-1));
         nodes.push(node);
         root.append(node);
         a0 = a1;
@@ -666,6 +896,14 @@
       li.addEventListener("pointerleave", () => focus(-1));
       li.addEventListener("focus", () => focus(i));
       li.addEventListener("blur", () => focus(-1));
+      if (hintOf(i) && s.value > 0) {
+        const hint = hintOf(i);
+        li.classList.add("pickable");
+        li.setAttribute("role", "button");
+        li.title = hint.charAt(0).toUpperCase() + hint.slice(1);
+        li.addEventListener("click", () => o.open(i));
+        li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); o.open(i); } });
+      }
       keysEl.append(li);
     });
     return el("div", { class: "donut-wrap" }, root, keysEl);
@@ -698,9 +936,52 @@
     return el("div", {}, list, more);
   }
 
-  function tile(label, value, sub, color) {
+  // delta, when given, is a comparison line from change() or pointsChange().
+  function tile(label, value, sub, color, delta) {
     return el("div", { class: "tile", style: color ? `--c:${color}` : null }, el("div", { class: "label", text: label }),
-      el("div", { class: "value", text: value }), sub ? el("div", { class: "sub", text: sub }) : null);
+      el("div", { class: "value", text: value }), sub ? el("div", { class: "sub", text: sub }) : null, delta || null);
+  }
+
+  // previousPeriod is the stretch just before [from, to) with the same
+  // length — or, for "This year", the same dates last year. It is null for
+  // "All time", and when the history doesn't reach back that far (a
+  // comparison with a half-covered period would mislead).
+  function previousPeriod(tab, fallback, from, to) {
+    const r = setting(tab, "range", fallback);
+    if (r === "all" || !(to > from)) return null;
+    let a, b, label, where;
+    if (r === "year") {
+      const s = new Date(from), e = new Date(to);
+      s.setFullYear(s.getFullYear() - 1); e.setFullYear(e.getFullYear() - 1);
+      a = s.getTime(); b = e.getTime(); label = "same dates last year"; where = "on the same dates last year";
+    } else {
+      const days = Math.round((to - from) / DAY), s = new Date(from);
+      s.setDate(s.getDate() - days);
+      a = s.getTime(); b = from; label = `previous ${num(days)} ${days === 1 ? "day" : "days"}`; where = `in the ${label}`;
+    }
+    const oldest = state.allPlays && state.allPlays.length ? state.allPlays[state.allPlays.length - 1].ended : Infinity;
+    if (oldest > a) return null;
+    return { range: [a, b], label, where, span: `${dateFmt.format(a)} – ${dateFmt.format(b - 1)}` };
+  }
+  function deltaLine(text, dir, title) {
+    return el("div", { class: `delta ${dir}`, title },
+      el("span", { class: "arrow", "aria-hidden": "true", text: { up: "↑", down: "↓", flat: "→" }[dir] }), text);
+  }
+  // change compares two amounts as a percentage.
+  function change(now, then, prev, fmtThen) {
+    const title = `${fmtThen(then)} ${prev.where} (${prev.span})`;
+    if (then <= 0) return now > 0 ? deltaLine(`new vs ${prev.label}`, "up", title) : null;
+    const d = (now - then) / then;
+    if (Math.abs(d) < 0.005) return deltaLine(`same as ${prev.label}`, "flat", title);
+    const p = Math.abs(d) >= 10 ? num(Math.abs(d) * 100) : Math.round(Math.abs(d) * 100) || "<1";
+    return deltaLine(`${p}% vs ${prev.label}`, d > 0 ? "up" : "down", title);
+  }
+  // pointsChange compares two shares in percentage points.
+  function pointsChange(now, then, prev) {
+    const d = Math.round((now - then) * 100);
+    const title = `${Math.round(then * 100)}% ${prev.where} (${prev.span})`;
+    if (!d) return deltaLine(`same as ${prev.label}`, "flat", title);
+    return deltaLine(`${Math.abs(d)} pts vs ${prev.label}`, d > 0 ? "up" : "down", title);
   }
 
   function panel(title, ...body) {
@@ -743,12 +1024,22 @@
       const orderFixed = stack === "stream" ? STREAMS.map((s) => s[0]) : stack === "cat" ? CATS.map((c) => c[0]) : null;
       if (orderFixed) groups.sort((a, b2) => orderFixed.indexOf(a.key) - orderFixed.indexOf(b2.key));
       const shown = stack === "user" ? groups.slice(0, MAX_SERIES) : groups;
+      // drill: how History narrows to one series when its segment is clicked.
+      const catOffered = new Set(catFilter().map(([v]) => v));
+      const drillFor = (g) => {
+        if (stack === "stream") return { values: { stream: STREAM_LABEL[g.key] } };
+        if (stack === "cat") return catOffered.has(g.key) ? { cat: g.key } : { values: { type: CAT_LABEL[g.key] } };
+        return { extra: [split ? { k: "profile", v: g.key, l: `Profile: ${who(g.items[0])}` } : { k: "user", v: g.key, l: `User: ${g.items[0].user}` }] };
+      };
       const series = shown.map((g, i) => ({
-        name: name(g), items: g.items, values: new Array(b.list.length).fill(0),
+        name: name(g), items: g.items, values: new Array(b.list.length).fill(0), drill: drillFor(g),
         color: stack === "user" ? seriesColor(i) : stack === "stream" ? streamColor(g.key) : catColor(g.key),
       }));
       const rest = groups.slice(shown.length);
-      if (rest.length) series.push({ name: `${rest.length} more`, items: rest.flatMap((g) => g.items), values: new Array(b.list.length).fill(0), color: "var(--c-other)" });
+      if (rest.length) {
+        series.push({ name: `${rest.length} more`, items: rest.flatMap((g) => g.items), values: new Array(b.list.length).fill(0), color: "var(--c-other)",
+          drill: { extra: [{ k: split ? "profiles" : "users", v: rest.map((g) => g.key), l: `${num(rest.length)} other ${split ? "profiles" : "users"}` }] } });
+      }
       const f = MEASURES[measure];
       for (const s of series) {
         const values = s.values;
@@ -757,20 +1048,42 @@
       const what = { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure];
       const people = stack === "user" ? groups : groupBy(plays, split ? (p) => p.profileKey : (p) => p.userId, measure);
       const colorOf = new Map(shown.map((g, i) => [g.key, seriesColor(i)]));
+      const cat = setting(T, "cat", "all");
+      // Clicking a column opens its dates in History; a segment also narrows
+      // to that segment's user, stream type or media type.
+      const pickColumn = (i, si) => {
+        const d = si >= 0 ? series[si].drill : {};
+        openHistory({ range: dayRange(Math.max(b.list[i], from), Math.min(b.end(i), to)), cat: d.cat || cat, values: d.values, extra: d.extra,
+          origin: { tab: T, label: bucketTitle(b.unit, b.list[i]) + (si >= 0 ? ` · ${series[si].name}` : "") } });
+      };
+      const pickSlot = (wd, h) => {
+        const during = measure === "time";
+        openHistory({ range: rangeOf(T, D), cat,
+          extra: [{ k: "slot", v: [wd, h, during ? "during" : "start"], l: `${during ? "Playing" : "Started"} ${slotLabel(wd, h)}` }],
+          origin: { tab: T, label: slotLabel(wd, h) } });
+      };
+      // Each tile compares with the period just before this one.
+      const prev = previousPeriod(T, D, from, to);
+      const before = prev && byCat(inRange(state.plays, prev.range), cat);
+      const peopleCount = (list) => new Set(list.map(split ? (p) => p.profileKey : (p) => p.userId)).size;
+      const transRate = (list) => (list.length ? list.filter((p) => p.stream === "transcode").length / list.length : 0);
+      const delta = (now, then, fmtThen) => (prev ? change(now, then, prev, fmtThen) : null);
       content.replaceChildren(
         el("div", { class: "tiles" },
-          tile("Watch time", hours(sum(plays, (p) => p.watched)), plays.some((p) => p.estimated) ? "≈ includes estimated older plays" : null),
-          tile("Smart plays", dec(sum(plays, (p) => p.smart)), "watch time ÷ length"),
-          tile("Plays", num(plays.length)),
-          tile(split ? "Active profiles" : "Active users", num(people.length)),
-          tile("Transcoded", pct(plays.filter((p) => p.stream === "transcode").length, plays.length), "of plays")),
-        panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what,
-          (i) => openHistory(Math.max(b.list[i], from), Math.min(b.end(i), to), setting(T, "cat", "all")))),
+          tile("Watch time", hours(sum(plays, (p) => p.watched)), plays.some((p) => p.estimated) ? "≈ includes estimated older plays" : null, null,
+            before && delta(sum(plays, (p) => p.watched), sum(before, (p) => p.watched), hours)),
+          tile("Smart plays", dec(sum(plays, (p) => p.smart)), "watch time ÷ length", null,
+            before && delta(sum(plays, (p) => p.smart), sum(before, (p) => p.smart), dec)),
+          tile("Plays", num(plays.length), null, null, before && delta(plays.length, before.length, num)),
+          tile(split ? "Active profiles" : "Active users", num(people.length), null, null, before && delta(people.length, peopleCount(before), num)),
+          tile("Transcoded", pct(plays.filter((p) => p.stream === "transcode").length, plays.length), "of plays", null,
+            before && before.length ? pointsChange(transRate(plays), transRate(before), prev) : null)),
+        panel(`${what} per ${b.unit}`, ...stackedColumns(b, series, fmt, what, pickColumn)),
         el("div", { class: "grid2" },
           panel(split ? "By profile" : "By user", barList(people, (g) => (split ? who(g.items[0]) : g.items[0].user), (g) => fmt(g.value),
             (g) => `${num(g.plays)} plays · ${hours(g.time)}`, stack === "user" ? (g) => colorOf.get(g.key) || "var(--c-other)" : null, 15,
             { hint: (g) => `Open ${split ? who(g.items[0]) : g.items[0].user} in Users`, open: (g) => openUser(g.items[0], split) })),
-          panel(`${what} by weekday and hour`, heatmap(plays, measure), el("p", { class: "note", text: "Your local time. Watch time is spread over the hours a play ran." }))));
+          panel(`${what} by weekday and hour`, heatmap(plays, measure, pickSlot), el("p", { class: "note", text: "Your local time. Watch time is spread over the hours a play ran. Click an hour to see its plays in History." }))));
     };
     view.append(toolbar(
       rangeControl(T, D, draw),
@@ -781,7 +1094,7 @@
     draw();
   }
 
-  function heatmap(plays, measure) {
+  function heatmap(plays, measure, open) {
     const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
     const f = MEASURES[measure];
     for (const p of plays) {
@@ -805,9 +1118,12 @@
     return el("div", { class: "heat", role: "img", "aria-label": "Activity by weekday and hour" },
       el("span"), Array.from({ length: 24 }, (_, h) => el("span", { class: "hour", text: h % 3 === 0 ? String(h) : "" })),
       grid.map((row, d) => [el("span", { class: "wd", text: WEEKDAYS[d] }), row.map((v, h) => {
-        const cell = el("span", { class: "cell", style: v > 0 ? `--a:${(0.15 + 0.85 * (v / maxV)).toFixed(3)}` : null });
-        hover(cell, () => tipRows(`${FULL_DAYS[d]}, ${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`,
-          [{ name: { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure], value: fmt(v), strong: true }]));
+        const pickable = open && v > 0;
+        const cell = el("span", { class: pickable ? "cell pick" : "cell", style: v > 0 ? `--a:${(0.15 + 0.85 * (v / maxV)).toFixed(3)}` : null });
+        if (pickable) clickToOpen(cell, () => open(d, h));
+        hover(cell, () => tipRows(slotLabel(d, h),
+          [{ name: { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure], value: fmt(v), strong: true }],
+          pickable ? `${tapWord()} to see these plays in History` : null));
         return cell;
       })]));
   }
@@ -815,35 +1131,75 @@
   // openUser shows one user (or one profile) on the Users tab over the same
   // dates the Activity tab is showing.
   function openUser(p, withProfile) {
-    setSetting("users", "user", p.userId);
-    setSetting("users", "profile", withProfile ? p.profile : "");
-    for (const k of ["range", "from", "to"]) setSetting("users", k, setting("activity", k, k === "range" ? "30" : ""));
-    if (state.tableFilters) delete state.tableFilters.users;
-    state.page.users = 0;
-    state.tab = "users"; remember("tab", "users");
-    render();
-    window.scrollTo(0, 0);
-    const tab = $("tab-users");
-    if (tab) tab.focus({ preventScroll: true });
+    navigate("users", () => {
+      setSetting("users", "user", p.userId);
+      setSetting("users", "profile", withProfile ? p.profile : "");
+      for (const k of ["range", "from", "to"]) setSetting("users", k, setting("activity", k, k === "range" ? "30" : ""));
+      if (state.tableFilters) delete state.tableFilters.users;
+      state.page.users = 0;
+    });
   }
 
-  // openHistory shows the History tab over [from, to) — one chart column,
-  // whether that's a day, a week or a month — with the same media filter
-  // the chart had. Both ends are local midnights, so the custom range's
-  // inclusive "to" date is the day before `to`.
-  function openHistory(from, to, cat) {
-    setSetting("history", "range", "custom");
-    setSetting("history", "from", isoDay(from));
-    setSetting("history", "to", isoDay(to - 1));
-    setSetting("history", "cat", cat);
-    if (state.tableFilters) delete state.tableFilters.history;
-    state.page.history = 0;
-    state.tab = "history"; remember("tab", "history");
-    render();
-    window.scrollTo(0, 0);
-    const tab = $("tab-history");
-    if (tab) tab.focus({ preventScroll: true });
+  // A tab's date range, to hand to openHistory.
+  const rangeOf = (tab, fallback) => ({ range: setting(tab, "range", fallback), from: setting(tab, "from", ""), to: setting(tab, "to", "") });
+  // dayRange is [from, to) between local midnights as a custom range; the
+  // custom range's "to" date is inclusive, so it's the day before `to`.
+  const dayRange = (from, to) => ({ range: "custom", from: isoDay(from), to: isoDay(to - 1) });
+
+  // openHistory shows the History tab narrowed to what was clicked
+  // somewhere else: a date range, a media type, column filters (values,
+  // keyed by column) and extra filters (see EXTRA). origin names where the
+  // click came from, for the note above the table; the History range it
+  // replaced is kept with it so "Clear filters" can put it back.
+  function openHistory(o) {
+    navigate("history", () => {
+      const prev = { ...rangeOf("history", "30"), cat: setting("history", "cat", "all") };
+      const back = state.tableFilters && state.tableFilters.history && state.tableFilters.history.origin;
+      for (const k of ["range", "from", "to"]) setSetting("history", k, o.range[k] || "");
+      setSetting("history", "cat", o.cat || "all");
+      if (!state.tableFilters) state.tableFilters = {};
+      const values = {};
+      for (const [k, v] of Object.entries(o.values || {})) values[k] = { not: false, set: new Set([v]) };
+      state.tableFilters.history = { text: "", values, min: 0, extra: o.extra || [],
+        // Chained drills keep the History range from before the first one.
+        origin: o.origin ? { ...o.origin, prev: back && back.prev ? back.prev : prev } : undefined };
+      state.page.history = 0;
+    }, { drill: true });
   }
+
+  // Extra History filters for things the table has no column for. Each is
+  // { k: kind, v: value, l: chip label }, so it fits in the URL.
+  const EXTRA = {
+    user: (p, v) => p.userId === v,
+    profile: (p, v) => p.profileKey === v,
+    users: (p, v) => v.includes(p.userId),
+    profiles: (p, v) => v.includes(p.profileKey),
+    item: (p, v) => p.itemId === v,
+    series: (p, v) => p.series === v,
+    client: (p, v) => Boolean(p.client || p.location) && (p.client || "Unknown") === v,
+    location: (p, v) => Boolean(p.client || p.location) && locLabel(p) === v,
+    // [weekday, hour, "start" | "during"], matching how the heatmap counts.
+    slot: (p, v) => (v[2] === "start" ? startedIn : ranIn)(p, v[0], v[1]),
+  };
+  function startedIn(p, wd, h) {
+    const l = localMs(p.started || p.ended - p.watched * 1000);
+    return weekdayOfLocal(l) === wd && Math.floor((l % DAY) / HOUR) === h;
+  }
+  // ranIn: the play was running during that weekday hour (the heatmap's
+  // watch-time view spreads each play over the hours it ran).
+  function ranIn(p, wd, h) {
+    const start = p.started || p.ended - p.watched * 1000;
+    let left = p.watched * 1000, l = localMs(Math.max(start, p.ended - left));
+    for (let n = 0; left > 0 && n < 170; n++) {
+      const dayIdx = Math.floor(l / DAY), within = l - dayIdx * DAY, hr = Math.floor(within / HOUR);
+      if ((dayIdx + 3) % 7 === wd && hr === h) return true;
+      const span = Math.min(left, (hr + 1) * HOUR - within);
+      left -= span; l += span;
+    }
+    return false;
+  }
+  const locLabel = (p) => ({ local: "Local network", remote: "Remote" }[p.location] || "Unknown");
+  const slotLabel = (wd, h) => `${FULL_DAYS[wd]}, ${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`;
 
   // ---------- Users tab ----------
   function renderUsers(view) {
@@ -880,6 +1236,20 @@
         const items = plays.filter((p) => p.stream === s);
         return { name: label, value: sum(items, (p) => p.watched), color: streamColor(s), sub: `${hours(sum(items, (p) => p.watched))} · ${num(items.length)} plays`, n: items.length };
       }).filter((s) => s.n > 0 || s.name !== "Unknown");
+      // The donuts filter this user's table below (clicking again undoes it).
+      const tableRule = (key) => state.tableFilters && state.tableFilters.users && state.tableFilters.users.values[key];
+      const isOnly = (key, v) => { const r = tableRule(key); return Boolean(r && !r.not && r.set.size === 1 && r.set.has(v)); };
+      const onlyInTable = (key, v) => {
+        if (!state.tableFilters) state.tableFilters = {};
+        const f = state.tableFilters.users || (state.tableFilters.users = { text: "", values: {}, min: 0, extra: [] });
+        if (isOnly(key, v)) delete f.values[key]; else f.values[key] = { not: false, set: new Set([v]) };
+        state.page.users = 0;
+        draw(); syncURL();
+        const table = content.querySelector(".sessions");
+        if (table) table.scrollIntoView({ block: "start", behavior: "smooth" });
+      };
+      const tableHint = (key, word) => (v) => (isOnly(key, v) ? `show every ${word} in the table` : "show only these plays in the table");
+      const catSlices = cats.filter((x) => x.c === "movies" || x.c === "tv" || (x.c === "audiobooks" && showAudiobooks) || (x.c === "other" && x.items.length));
       content.replaceChildren(...[
         rangeNote ? el("p", { class: "note range-note", text: rangeNote }) : null,
         el("div", { class: "tiles" },
@@ -888,8 +1258,10 @@
           showAudiobooks ? catTile(cats[2], "books listened") : null,
           cats[3].items.length ? catTile(cats[3], "plays") : null),
         el("div", { class: "grid2" },
-          panel("How they stream", donut(streams, pct(streams[0].value, total), "direct play", hours), el("p", { class: "note", text: "Share of watch time. Remux copies the video into a new container without re-encoding it." })),
-          panel("What they watch", donut(cats.filter((x) => x.c === "movies" || x.c === "tv" || (x.c === "audiobooks" && showAudiobooks) || (x.c === "other" && x.items.length)).map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours))),
+          panel("How they stream", donut(streams, pct(streams[0].value, total), "direct play", hours,
+            { open: (i) => onlyInTable("stream", streams[i].name), hint: (i) => tableHint("stream", "stream type")(streams[i].name) }), el("p", { class: "note", text: "Share of watch time. Remux copies the video into a new container without re-encoding it." })),
+          panel("What they watch", donut(catSlices.map((x) => ({ name: x.label, value: x.time, color: catColor(x.c), sub: `${hours(x.time)} · ${num(x.items.length)} plays` })), hours(total), "watched", hours,
+            { open: (i) => onlyInTable("type", catSlices[i].label), hint: (i) => tableHint("type", "type")(catSlices[i].label) }))),
         sessions(plays, T)].filter(Boolean));
     };
     userSel.addEventListener("change", () => {
@@ -938,8 +1310,10 @@
     const text = f.text.trim().toLowerCase();
     const active = cols.filter((c) => c.kind === "values" && c.key !== skip && f.values[c.key]);
     const minSec = skip === "watched" ? 0 : f.min * 60;
-    if (!text && !active.length && !minSec) return plays;
+    const extra = f.extra || [];
+    if (!text && !active.length && !minSec && !extra.length) return plays;
     return plays.filter((p) => (!text || titleText(p).includes(text)) && (!minSec || p.watched >= minSec) &&
+      extra.every((x) => EXTRA[x.k](p, x.v)) &&
       active.every((c) => { const r = f.values[c.key]; return r.not !== r.set.has(c.value(p)); }));
   }
 
@@ -968,12 +1342,15 @@
     return close;
   }
 
-  function sessions(plays, pageKey) {
+  // onClear, when given, runs instead of the table's own "Clear filters"
+  // (History uses it to also undo a drill-down's date range).
+  function sessions(plays, pageKey, onClear) {
     plays = plays.slice().sort((a, b) => (b.started || b.ended) - (a.started || a.ended));
     const showUser = pageKey !== "users";
     const cols = sessionColumns(showUser);
     if (!state.tableFilters) state.tableFilters = {};
-    const f = state.tableFilters[pageKey] || (state.tableFilters[pageKey] = { text: "", values: {}, min: 0 });
+    const f = state.tableFilters[pageKey] || (state.tableFilters[pageKey] = { text: "", values: {}, min: 0, extra: [] });
+    if (!f.extra) f.extra = [];
     let rows = plays;
 
     const count = el("h2");
@@ -984,7 +1361,7 @@
     const chips = el("div", { class: "chips" });
     const box = el("div");
 
-    const changed = () => { state.page[pageKey] = 0; draw(); };
+    const changed = () => { state.page[pageKey] = 0; draw(); syncURL(); };
     // A value filter is either "only these" or "all but these" (unticking
     // from the full list), so values hidden by other filters aren't lost.
     const setValues = (key, rule) => { if (!rule || (rule.not && !rule.set.size)) delete f.values[key]; else f.values[key] = rule; changed(); };
@@ -1042,9 +1419,14 @@
       }
       if (f.min) list.push(el("span", { class: "chip" }, `Watched ≥ ${num(f.min)}m`,
         el("button", { type: "button", "aria-label": "Remove watched filter", onclick: () => { f.min = 0; changed(); } }, "×")));
-      if (list.length || f.text) {
+      f.extra.forEach((x, i) => list.push(el("span", { class: "chip" }, x.l,
+        el("button", { type: "button", "aria-label": `Remove ${x.l} filter`, onclick: () => { f.extra.splice(i, 1); changed(); } }, "×"))));
+      if (list.length || f.text || (onClear && f.origin)) {
         list.push(el("button", { type: "button", class: "small link", text: "Clear filters",
-          onclick: () => { f.text = ""; search.value = ""; f.values = {}; f.min = 0; changed(); } }));
+          onclick: () => {
+            f.text = ""; search.value = ""; f.values = {}; f.min = 0; f.extra = [];
+            if (onClear) onClear(); else changed();
+          } }));
       }
       chips.replaceChildren(...list);
     };
@@ -1095,7 +1477,7 @@
         rows.some((p) => p.estimated) ? el("p", { class: "note", text: "≈ marks plays recorded before Silo measured watch time; their watch time is an estimate." }) : null].filter(Boolean));
     };
     draw();
-    return el("section", { class: "panel" },
+    return el("section", { class: "panel sessions" },
       el("div", { class: "panel-head" }, count, exportBtn),
       el("div", { class: "table-tools" }, search, chips),
       box);
@@ -1121,6 +1503,18 @@
         measure !== "plays" ? `${num(g.plays)} plays` : null,
         `${num(viewers(g))} ${viewers(g) === 1 ? "user" : "users"}`,
       ].filter(Boolean).join(" · ");
+      const userName = user ? (userOpts.find(([k]) => k === user) || [, ""])[1] : "";
+      // A title (or show) opens its plays in History, over the same dates
+      // and for the same user.
+      const openTitle = (c, g) => {
+        const p = g.items[0], show = c === "tv" && p.series;
+        const extra = [show ? { k: "series", v: p.series, l: `Show: ${p.series}` } : { k: "item", v: p.itemId, l: `Title: ${p.title}` }];
+        if (user) extra.unshift({ k: "user", v: user, l: `User: ${userName}` });
+        openHistory({ range: rangeOf(T, D), cat: catFilter().some(([v]) => v === c) ? c : "all", extra,
+          origin: { tab: T, label: (show ? p.series : p.title) + (user ? ` · ${userName}` : "") } });
+      };
+      const titlePick = (c) => ({ hint: (g) => `Open ${label0(c, g)} in History`, open: (g) => openTitle(c, g) });
+      const label0 = (c, g) => (c === "tv" && g.items[0].series) || g.items[0].title;
       const section = (c, title, key, label, note) => {
         const items = plays.filter((p) => p.cat === c);
         const groups = groupBy(items, key, measure);
@@ -1128,7 +1522,7 @@
         const totalText = measure === "smart" ? dec(total) + smartUnit[c] : fmt(total);
         const head = [title, el("span", { class: "total", text: items.length ? `${totalText} total · ${num(groups.length)} ${groups.length === 1 ? "title" : "titles"}` : "" })];
         if (!items.length) return panel(head, empty(note || `No ${title.toLowerCase()} in this range.`));
-        if (chart === "list") return panel(head, barList(groups, label, valueText(c), subText(c), () => catColor(c), limit));
+        if (chart === "list") return panel(head, barList(groups, label, valueText(c), subText(c), () => catColor(c), limit, titlePick(c)));
         // Pie: the top items, then everything else as one slice.
         const top = groups.slice(0, limit), rest = groups.slice(limit);
         const slices = top.map((g, i) => ({ name: label(g), value: g.value, color: seriesColor(i), sub: subText(c)(g) ? `${valueText(c)(g)} · ${subText(c)(g)}` : valueText(c)(g) }));
@@ -1137,7 +1531,8 @@
           slices.push({ name: `Other (${num(rest.length)} ${rest.length === 1 ? "title" : "titles"})`, value: v, color: "var(--c-other)",
             sub: measure === "smart" ? dec(v) + smartUnit[c] : fmt(v) });
         }
-        return panel(head, donut(slices, "", "", valueText(c), { pie: true, size: 200 }));
+        return panel(head, donut(slices, "", "", valueText(c), { pie: true, size: 200,
+          open: (i) => openTitle(c, top[i]), hint: (i) => (i < top.length ? "see these plays in History" : null) }));
       };
       const chart = setting(T, "chart", "list");
       const limitSetting = setting(T, "limit", "10");
@@ -1171,14 +1566,22 @@
     const draw = () => {
       const plays = inRange(state.plays, bounds(T, D));
       const tracked = plays.filter((p) => p.client || p.location);
-      const loc = (p) => ({ local: "Local network", remote: "Remote" }[p.location] || "Unknown");
-      const list = (groups) => barList(groups, (g) => g.key, (g) => hours(g.value), (g) => `${num(g.plays)} plays`, null, 15);
+      const loc = locLabel;
+      // Each row opens its plays in History over the same dates.
+      const opener = (make) => ({ hint: (g) => `Open ${g.key} in History`, open: (g) => {
+        const d = make(g);
+        openHistory({ range: rangeOf(T, D), values: d.values, extra: d.extra, origin: { tab: T, label: d.label } });
+      } });
+      const byClient = opener((g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }], label: g.key }));
+      const byLocation = opener((g) => ({ extra: [{ k: "location", v: g.key, l: g.key }], label: g.key }));
+      const byTranscodes = opener((g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }], values: { stream: STREAM_LABEL.transcode }, label: `${g.key} · transcodes` }));
+      const list = (groups, pick) => barList(groups, (g) => g.key, (g) => hours(g.value), (g) => `${num(g.plays)} plays`, null, 15, pick);
       content.replaceChildren(
         el("p", { class: "note range-note", text: `${num(tracked.length)} of ${num(plays.length)} plays in this range have client details. Only plays that started while client tracking was on are covered.` }),
         el("div", { class: "grid2" },
-          panel("By client", list(groupBy(tracked, (p) => p.client || "Unknown"))),
-          panel("Local or remote", list(groupBy(tracked, loc))),
-          panel("Transcodes by client", list(groupBy(tracked.filter((p) => p.stream === "transcode"), (p) => p.client || "Unknown")))));
+          panel("By client", list(groupBy(tracked, (p) => p.client || "Unknown"), byClient)),
+          panel("Local or remote", list(groupBy(tracked, loc), byLocation)),
+          panel("Transcodes by client", list(groupBy(tracked.filter((p) => p.stream === "transcode"), (p) => p.client || "Unknown"), byTranscodes))));
     };
     view.append(toolbar(rangeControl(T, D, draw)), content);
     draw();
@@ -1188,11 +1591,40 @@
   function renderHistory(view) {
     const T = "history", D = "30";
     const content = el("div", { class: "stack" });
+    const filters = () => (state.tableFilters && state.tableFilters.history) || null;
+    // "Clear filters" after a drill-down also puts back the date range and
+    // media type History had before it.
+    const clearAll = () => {
+      const f = filters(), prev = f && f.origin && f.origin.prev;
+      if (f) delete f.origin;
+      if (prev) for (const k of ["range", "from", "to", "cat"]) setSetting(T, k, prev[k] || (k === "range" ? D : k === "cat" ? "all" : ""));
+      state.page.history = 0;
+      render();
+    };
+    const note = () => {
+      const f = filters(), o = f && f.origin;
+      if (!o) return null;
+      const tabName = { activity: "Activity", users: "Users", breakdown: "Breakdown", clients: "Clients" }[o.tab] || "the report";
+      // Back returns to the chart itself when this page came from it;
+      // a bookmarked drill-down opens that tab instead.
+      const goBack = () => {
+        if (history.state && history.state.drill) history.back();
+        else navigate(o.tab);
+      };
+      return el("div", { class: "origin", role: "note" },
+        el("span", { class: "origin-text" }, el("span", { class: "origin-from", text: `From ${tabName}` }), o.label ? ` · ${o.label}` : ""),
+        el("button", { type: "button", class: "small link", text: `← Back to ${tabName}`, onclick: goBack }),
+        el("button", { type: "button", class: "icon", "aria-label": "Dismiss", title: "Dismiss",
+          onclick: () => { delete f.origin; syncURL(); render(); } }, "×"));
+    };
     const draw = () => {
       state.page.history = 0;
-      content.replaceChildren(sessions(byCat(inRange(state.plays, bounds(T, D)), setting(T, "cat", "all")), "history"));
+      content.replaceChildren(...[note(),
+        sessions(byCat(inRange(state.plays, bounds(T, D)), setting(T, "cat", "all")), "history", clearAll)].filter(Boolean));
     };
-    view.append(toolbar(rangeControl(T, D, draw), segmented("Show", T, "cat", catFilter(), "all", draw)), content);
+    // Picking other dates or media by hand ends the drill-down.
+    const changedByHand = () => { const f = filters(); if (f) delete f.origin; draw(); syncURL(); };
+    view.append(toolbar(rangeControl(T, D, changedByHand), segmented("Show", T, "cat", catFilter(), "all", changedByHand)), content);
     draw();
   }
 
@@ -1427,6 +1859,7 @@
     const view = el("div", { class: "stack" });
     RENDER[state.tab](view);
     main.replaceChildren(view);
+    syncURL();
   }
 
   function wireTabs() {
@@ -1434,7 +1867,8 @@
     tabs.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-tab]");
       if (!b || b.dataset.tab === state.tab) return;
-      state.tab = b.dataset.tab; remember("tab", state.tab); render();
+      navigate(b.dataset.tab);
+      b.focus();
     });
     tabs.addEventListener("keydown", (e) => {
       if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
@@ -1450,6 +1884,9 @@
   load().then(() => {
     $("tab-clients").hidden = !state.features.clients;
     showStatus();
+    // A link with a view in it wins over the view remembered last time.
+    readHash();
+    urlReady = true;
     render();
     $("customize").disabled = false;
     resumeDraft();

@@ -328,3 +328,27 @@ button.conn[data-state="checking"] .conn-dot { animation: pulse 1.2s ease-in-out
 .bar.pickable { cursor: pointer; }
 .bar.pickable:hover .name, .bar.pickable:focus-visible .name { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .bar.pickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Drill-downs: chart marks that open History, and the note History shows. */
+.chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+.chart svg.hovering .col.active.has-seg rect[data-s]:not(.seg) { opacity: .45; }
+.tip-rows tr.on td { color: var(--tip-text); font-weight: 600; }
+.tip-rows tr.on td:first-child { text-decoration: underline; text-underline-offset: 2px; }
+.heat .cell.pick { cursor: pointer; }
+.donut .slice:not(.pick) { cursor: default; }
+.donut-keys li.pickable { cursor: pointer; border-radius: 6px; }
+.donut-keys li.pickable:hover .k-name, .donut-keys li.pickable:focus-visible .k-name { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.origin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 8px 8px 14px; font-size: 13px;
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: var(--radius); }
+.origin-text { flex: 1 1 auto; min-width: 0; }
+.origin-from { font-weight: 600; }
+.origin button.link { margin: 0; }
+.origin button.icon { width: 26px; height: 26px; font-size: 16px; }
+.origin button.icon:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* Comparison with the previous period on the Activity tiles. */
+.tile .delta { display: flex; gap: 4px; align-items: baseline; margin-top: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tile .delta .arrow { font-weight: 700; }
+.tile .delta.up .arrow { color: var(--text); }
+.tile .delta.down .arrow { color: var(--text); }
+.origin button.icon { margin-left: auto; }
