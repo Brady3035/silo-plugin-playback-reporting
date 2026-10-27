@@ -1537,7 +1537,50 @@
       const chart = setting(T, "chart", "list");
       const limitSetting = setting(T, "limit", "10");
       const limit = limitSetting === "all" ? Infinity : Number(limitSetting) || 10;
+      // shareSection shows each group's share of everything played in the
+      // range (by user, client or stream type); a row opens its plays in
+      // History. color(g, i) picks each group's color.
+      const shareSection = (title, items, key, name, color, noun, drill, note) => {
+        const groups = groupBy(items, key, measure);
+        const total = groups.reduce((a, g) => a + g.value, 0);
+        const amount = (v) => (measure === "smart" ? dec(v) + " smart plays" : fmt(v));
+        const nouns = (n) => `${num(n)} ${n === 1 ? noun : noun + "s"}`;
+        const head = [title, el("span", { class: "total", text: items.length ? `${amount(total)} total · ${nouns(groups.length)}` : "" })];
+        if (!items.length) return panel(head, empty(note || "No plays in this range."));
+        const sub = (g) => [`${pct(g.value, total)} of total`, measure !== "time" ? hours(g.time) : null,
+          measure !== "plays" ? `${num(g.plays)} plays` : null].filter(Boolean).join(" · ");
+        const open = (g) => {
+          const d = drill(g);
+          if (user) d.extra = [{ k: "user", v: user, l: `User: ${userName}` }, ...(d.extra || [])];
+          openHistory({ range: rangeOf(T, D), cat: "all", values: d.values, extra: d.extra,
+            origin: { tab: T, label: name(g) + (user ? ` · ${userName}` : "") } });
+        };
+        if (chart === "list") {
+          return panel(head, barList(groups, name, (g) => amount(g.value), sub, (g) => color(g, groups.indexOf(g)), limit,
+            { hint: (g) => `Open ${name(g)} in History`, open }));
+        }
+        const top = groups.slice(0, limit), rest = groups.slice(limit);
+        const slices = top.map((g, i) => ({ name: name(g), value: g.value, color: color(g, i), sub: amount(g.value) }));
+        if (rest.length) {
+          const v = rest.reduce((a, g) => a + g.value, 0);
+          slices.push({ name: `Other (${nouns(rest.length)})`, value: v, color: "var(--c-other)", sub: amount(v) });
+        }
+        return panel(head, donut(slices, "", "", amount, { pie: true, size: 200,
+          open: (i) => open(top[i]), hint: (i) => (i < top.length ? "see these plays in History" : null) }));
+      };
+      // Users is left out when one user is picked, where it would always be 100%.
+      const usersSection = () => shareSection("Users", plays, (p) => p.userId, (g) => g.items[0].user, (g, i) => seriesColor(i), "user",
+        (g) => ({ extra: [{ k: "user", v: g.key, l: `User: ${g.items[0].user}` }] }));
+      const streamSection = () => shareSection("Stream type", plays, (p) => p.stream, (g) => STREAM_LABEL[g.key] || g.key, (g) => streamColor(g.key), "type",
+        (g) => ({ values: { stream: STREAM_LABEL[g.key] } }));
+      // Clients only covers plays that started while client tracking was on.
+      const clientSection = () => shareSection("Clients", plays.filter((p) => p.client || p.location), (p) => p.client || "Unknown", (g) => g.key,
+        (g, i) => seriesColor(i), "client", (g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }] }),
+        "No plays with client details in this range.");
       const sections = [
+        user ? null : usersSection(),
+        streamSection(),
+        state.features.clients ? clientSection() : null,
         section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
         section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
       ];
