@@ -79,7 +79,7 @@ select:disabled { opacity: .6; }
 .panel-head .total { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .grid2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .grid3 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
-.grid3.even { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: stretch; }
+.grid3.even { align-items: stretch; }
 
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
@@ -149,7 +149,7 @@ button.small:disabled { opacity: .5; cursor: default; }
   .top { padding: 16px var(--gutter) 8px; }
   .tabs { padding: 0 8px; }
   main { padding: 12px var(--gutter) 32px; }
-  .grid2, .grid3, .grid3.even { grid-template-columns: 1fr; }
+  .grid2, .grid3 { grid-template-columns: 1fr; }
   .toolbar { gap: 10px 12px; }
   .seg { flex-wrap: wrap; }
   .heat { grid-template-columns: 28px repeat(24, minmax(5px, 1fr)); gap: 2px; }
