@@ -1577,10 +1577,14 @@
       const clientSection = () => shareSection("Clients", plays.filter((p) => p.client || p.location), (p) => p.client || "Unknown", (g) => g.key,
         (g, i) => seriesColor(i), "client", (g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }] }),
         "No plays with client details in this range.");
-      const sections = [
+      // Shares get a row of their own, above the titles, so panels of
+      // different kinds don't interleave.
+      const shares = [
         user ? null : usersSection(),
         streamSection(),
         state.features.clients ? clientSection() : null,
+      ];
+      const sections = [
         section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
         section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
       ];
@@ -1591,7 +1595,8 @@
       if (plays.some((p) => p.cat === "other")) sections.push(section("other", "Other", (p) => p.itemId, (g) => g.items[0].title));
       content.replaceChildren(...[
         measure === "smart" ? el("p", { class: "note range-note", text: "Smart plays divide watch time by the length of the movie, episode or book: two half-watched episodes count as one episode watched." }) : null,
-        el("div", { class: "grid3" }, sections)].filter(Boolean));
+        el("div", { class: "grid3 even" }, shares),
+        el("div", { class: "grid3 even" }, sections)].filter(Boolean));
     };
     view.append(toolbar(
       rangeControl(T, D, draw),
