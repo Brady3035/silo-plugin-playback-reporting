@@ -17,11 +17,10 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 
 - **Activity**: a bar graph of watch time, plays or smart plays per day, week or month (picked from the date range). Stack by user, media type or stream type; **Separate profiles** splits each account into its profiles. Filter to Movies, TV shows or Audiobooks. Includes a weekday × hour heatmap. Click a user (or profile) in the list under the chart to open them on the Users tab over the same dates.
 - **Users**: pick a user (and optionally one profile). Totals for movies, TV and audiobooks, a donut of Direct Play / Remux / Transcode, a donut of what they watch, and a paged list of every session with CSV export. **All time** spans that user's own first to last play.
-- **Breakdown**: top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other).
+- **Breakdown**: shares by user, stream type and (with *Track clients* on) client, then top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other). **Arrange tiles** lets you drag the tiles (or use the arrows) into the order you want; **Save order** saves it for everyone who opens the report.
 - **History**: every play in a range, with CSV export.
 
 The session tables on **Users** and **History** filter by column: click a value in a row (a user, a type, a stream, Done) to show only rows with it, or open the funnel in a column header to tick values, type a title, or set a minimum watch time. Active filters show as chips above the table, and **Export CSV** exports what's shown.
-- **Clients**: only when *Track clients* is on.
 
 **Smart plays** = watch time ÷ length of the movie, episode or book. Two half-watched episodes count as one episode watched; a movie watched twice counts 2×.
 
@@ -50,7 +49,7 @@ Changes preview live and are saved by the plugin for everyone who opens the repo
 | | Server address | Optional; leave empty to use Silo's internal address. |
 | Report filters | Hide plays shorter than (seconds) | Leaves short plays out of every report. |
 | | Ignore list | One per line: `username` hides an account, `username/profile` hides one profile. Case-insensitive. |
-| Optional reports | Track clients | Polls live sessions every 15 s to record client app, local/remote and the actual play method. Off by default. |
+| Optional reports | Track clients | Polls live sessions every 15 s to record client app, local/remote and the actual play method, for the Clients tile on Breakdown and the History filters. Off by default. |
 
 Filters and the ignore list only hide plays in the reports. Silo's history is never changed. The page's status line shows how many plays are hidden.
 

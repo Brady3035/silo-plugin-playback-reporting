@@ -3,28 +3,34 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 )
 
 // ColorSettings are the report page's own settings, picked under Customize:
-// chart colors and whether audiobooks are part of the reports. Missing
-// roles and an empty palette mean the page's defaults.
+// chart colors and whether audiobooks are part of the reports, plus the
+// order of the Breakdown tiles. Missing roles, an empty palette and an
+// empty order mean the page's defaults.
 type ColorSettings struct {
 	Colors         map[string]string `json:"colors"`
 	Palette        []string          `json:"palette"`
 	ShowAudiobooks bool              `json:"show_audiobooks"`
+	BreakdownOrder []string          `json:"breakdown_order"`
 }
+
+// BreakdownTiles are the tiles the Breakdown tab can order.
+var BreakdownTiles = []string{"users", "stream", "clients", "movies", "tv", "audiobooks", "other"}
 
 const (
 	colorsStateKey = "settings/colors"
 	maxPalette     = 16
 )
 
-// clean keeps known roles with valid #rrggbb values and up to 16 palette
-// colors, lowercased.
+// clean keeps known roles with valid #rrggbb values, up to 16 palette
+// colors, lowercased, and each known Breakdown tile once.
 func (c ColorSettings) clean() ColorSettings {
-	out := ColorSettings{Colors: map[string]string{}, Palette: []string{}, ShowAudiobooks: c.ShowAudiobooks}
+	out := ColorSettings{Colors: map[string]string{}, Palette: []string{}, ShowAudiobooks: c.ShowAudiobooks, BreakdownOrder: []string{}}
 	for _, k := range ColorKeys {
 		if v := strings.ToLower(strings.TrimSpace(c.Colors[k])); hexColor.MatchString(v) {
 			out.Colors[k] = v
@@ -33,6 +39,11 @@ func (c ColorSettings) clean() ColorSettings {
 	for _, v := range c.Palette {
 		if v = strings.ToLower(strings.TrimSpace(v)); hexColor.MatchString(v) && len(out.Palette) < maxPalette {
 			out.Palette = append(out.Palette, v)
+		}
+	}
+	for _, v := range c.BreakdownOrder {
+		if slices.Contains(BreakdownTiles, v) && !slices.Contains(out.BreakdownOrder, v) {
+			out.BreakdownOrder = append(out.BreakdownOrder, v)
 		}
 	}
 	return out

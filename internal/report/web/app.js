@@ -157,14 +157,18 @@
   const ROLE_DEFAULT = Object.fromEntries(COLOR_ROLES.flatMap(([, roles]) => roles.map(([k, , d]) => [k, d])));
   const DEFAULT_PALETTE = ["#3d63dd", "#12a594", "#e5484d", "#f5a524", "#8e4ec6", "#0091ff", "#d6409f", "#46a758", "#e54666", "#00a2c7", "#978365", "#6e56cf"];
   const MAX_PALETTE = 16;
+  // The Breakdown tiles in their default order; the order can be changed
+  // on the tab and is saved with the colors.
+  const BREAKDOWN_TILES = ["users", "stream", "clients", "movies", "tv", "audiobooks", "other"];
   const HEX = /^#[0-9a-f]{6}$/i;
 
   function readSavedColors() {
     try {
       const raw = JSON.parse(($("saved-colors") || {}).textContent || "{}");
-      return { colors: raw.colors || {}, palette: Array.isArray(raw.palette) ? raw.palette : [], show_audiobooks: raw.show_audiobooks === true };
+      return { colors: raw.colors || {}, palette: Array.isArray(raw.palette) ? raw.palette : [], show_audiobooks: raw.show_audiobooks === true,
+        breakdown_order: Array.isArray(raw.breakdown_order) ? raw.breakdown_order : [] };
     } catch (_) {
-      return { colors: {}, palette: [], show_audiobooks: false };
+      return { colors: {}, palette: [], show_audiobooks: false, breakdown_order: [] };
     }
   }
   // fullColors fills a saved set with defaults so every role has a value.
@@ -172,7 +176,8 @@
     const colors = {};
     for (const k of Object.keys(ROLE_DEFAULT)) colors[k] = HEX.test(c.colors[k] || "") ? c.colors[k].toLowerCase() : ROLE_DEFAULT[k];
     const palette = (c.palette || []).filter((x) => HEX.test(x)).slice(0, MAX_PALETTE);
-    return { colors, palette: palette.length ? palette : DEFAULT_PALETTE.slice(), show_audiobooks: c.show_audiobooks === true };
+    const order = (c.breakdown_order || []).filter((t, i, a) => BREAKDOWN_TILES.includes(t) && a.indexOf(t) === i);
+    return { colors, palette: palette.length ? palette : DEFAULT_PALETTE.slice(), show_audiobooks: c.show_audiobooks === true, breakdown_order: order };
   }
   function applyColors(c) {
     const root = document.documentElement.style;
@@ -300,7 +305,6 @@
     activity: ["range", "from", "to", "cat", "measure", "stack", "profiles"],
     users: ["user", "profile", "range", "from", "to"],
     breakdown: ["range", "from", "to", "measure", "chart", "limit", "user"],
-    clients: ["range", "from", "to"],
     history: ["range", "from", "to", "cat"],
   };
   const TABLE_TABS = ["users", "history"];
@@ -1489,7 +1493,72 @@
     const users = groupBy(state.plays, (p) => p.userId, "time");
     const userOpts = [["", "Everyone"], ...users.map((g) => [g.key, g.items[0].user]).sort((a, b) => a[1].localeCompare(b[1]))];
     const content = el("div", { class: "stack" });
+    // While arranging, `arranging` is the working order of every tile
+    // (shown or not); Save stores it for everyone, Cancel drops it.
+    let arranging = null, dragId = null;
+    const arrangeBar = el("div", { class: "arrange-bar" });
+    const savedOrder = () => {
+      const saved = state.colors.breakdown_order || [];
+      return [...saved, ...BREAKDOWN_TILES.filter((t) => !saved.includes(t))];
+    };
+    // place moves tile `id` to where `target` is, ahead of it when moving
+    // back and behind it when moving forward.
+    const place = (id, target) => {
+      if (!id || id === target) return;
+      const forward = arranging.indexOf(id) < arranging.indexOf(target);
+      arranging.splice(arranging.indexOf(id), 1);
+      arranging.splice(arranging.indexOf(target) + (forward ? 1 : 0), 0, id);
+    };
+    const arrangeMsg = el("span", { class: "arrange-msg", role: "status", "aria-live": "polite" });
+    const drawArrangeBar = () => {
+      if (!arranging) {
+        arrangeBar.replaceChildren(el("button", { type: "button", class: "small", text: "Arrange tiles",
+          onclick: () => { arranging = savedOrder(); arrangeMsg.textContent = ""; draw(); } }));
+        return;
+      }
+      const saveBtn = el("button", { type: "button", class: "small primary", text: "Save order" });
+      saveBtn.addEventListener("click", async () => {
+        saveBtn.disabled = true; arrangeMsg.textContent = "Saving…"; arrangeMsg.classList.remove("error");
+        try {
+          state.colors = await postSettings({ ...state.colors, breakdown_order: arranging });
+          arranging = null; arrangeMsg.textContent = ""; draw();
+        } catch (err) {
+          saveBtn.disabled = false;
+          arrangeMsg.classList.add("error");
+          arrangeMsg.textContent = err.expired
+            ? "Your access to this page expired, so the order wasn't saved. Open Playback Reporting again from the admin menu."
+            : err.message || "Saving failed.";
+        }
+      });
+      arrangeBar.replaceChildren(
+        el("button", { type: "button", class: "small link", text: "Reset order", onclick: () => { arranging = BREAKDOWN_TILES.slice(); draw(); } }),
+        el("button", { type: "button", class: "small", text: "Cancel", onclick: () => { arranging = null; arrangeMsg.textContent = ""; draw(); } }),
+        saveBtn, arrangeMsg);
+    };
+    // arrangeTile adds the drag handle and move buttons to a tile.
+    const arrangeTile = (node, id, i, ids) => {
+      const move = (dir) => {
+        place(id, ids[i + dir]);
+        draw();
+        const again = content.querySelector(`[data-tile="${id}"] [data-dir="${dir}"]:not(:disabled)`) || content.querySelector(`[data-tile="${id}"] [data-dir]:not(:disabled)`);
+        if (again) again.focus();
+      };
+      const name = node.querySelector("h2").textContent;
+      node.dataset.tile = id;
+      node.draggable = true;
+      node.prepend(el("div", { class: "tile-move" },
+        el("span", { class: "grip", "aria-hidden": "true", text: "⠿" }),
+        el("span", { class: "grow", text: "Drag to move" }),
+        el("button", { type: "button", class: "icon", "data-dir": "-1", "aria-label": `Move ${name} earlier`, title: "Move earlier", disabled: i === 0, onclick: () => move(-1) }, "←"),
+        el("button", { type: "button", class: "icon", "data-dir": "1", "aria-label": `Move ${name} later`, title: "Move later", disabled: i === ids.length - 1, onclick: () => move(1) }, "→")));
+      node.addEventListener("dragstart", (e) => { dragId = id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id); node.classList.add("dragging"); });
+      node.addEventListener("dragend", () => { dragId = null; node.classList.remove("dragging"); });
+      node.addEventListener("dragover", (e) => { if (dragId && dragId !== id) { e.preventDefault(); node.classList.add("drop"); } });
+      node.addEventListener("dragleave", (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove("drop"); });
+      node.addEventListener("drop", (e) => { e.preventDefault(); const from = dragId; dragId = null; place(from, id); draw(); });
+    };
     const draw = () => {
+      drawArrangeBar();
       const measure = setting(T, "measure", "time");
       const fmt = fmtBy(measure);
       const user = setting(T, "user", "");
@@ -1577,60 +1646,34 @@
       const clientSection = () => shareSection("Clients", plays.filter((p) => p.client || p.location), (p) => p.client || "Unknown", (g) => g.key,
         (g, i) => seriesColor(i), "client", (g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }] }),
         "No plays with client details in this range.");
-      // Shares come first, then the titles; the grid fits as many columns
-      // as the page has room for.
-      const shares = [
-        user ? null : usersSection(),
-        streamSection(),
-        state.features.clients ? clientSection() : null,
-      ];
-      const sections = [
-        section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
-        section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
-      ];
-      if (showAudiobooks) {
-        sections.push(section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title,
-          "No audiobook plays in this range. Silo's playback history covers audiobooks played in Silo's own apps; Audiobookshelf-app listening isn't recorded there."));
+      // The tiles that apply here, in the saved order (or the one being
+      // arranged); the grid fits as many columns as the page has room for.
+      const tiles = {
+        users: () => (user ? null : usersSection()),
+        stream: streamSection,
+        clients: () => (state.features.clients ? clientSection() : null),
+        movies: () => section("movies", "Movies", (p) => p.itemId, (g) => g.items[0].title),
+        tv: () => section("tv", "TV shows", (p) => p.series || p.itemId, (g) => g.items[0].series || g.items[0].title),
+        audiobooks: () => (showAudiobooks ? section("audiobooks", "Audiobooks", (p) => p.itemId, (g) => g.items[0].title,
+          "No audiobook plays in this range. Silo's playback history covers audiobooks played in Silo's own apps; Audiobookshelf-app listening isn't recorded there.") : null),
+        other: () => (plays.some((p) => p.cat === "other") ? section("other", "Other", (p) => p.itemId, (g) => g.items[0].title) : null),
+      };
+      const shown = (arranging || savedOrder()).map((id) => [id, tiles[id]()]).filter(([, node]) => node);
+      if (arranging) {
+        const ids = shown.map(([id]) => id);
+        shown.forEach(([id, node], i) => arrangeTile(node, id, i, ids));
       }
-      if (plays.some((p) => p.cat === "other")) sections.push(section("other", "Other", (p) => p.itemId, (g) => g.items[0].title));
       content.replaceChildren(...[
+        arranging ? el("p", { class: "note range-note", text: "Drag the tiles, or use the arrows, to put them in the order you want, then save. The order is saved for everyone who opens the report." }) : null,
         measure === "smart" ? el("p", { class: "note range-note", text: "Smart plays divide watch time by the length of the movie, episode or book: two half-watched episodes count as one episode watched." }) : null,
-        el("div", { class: "grid3 even" }, shares, sections)].filter(Boolean));
+        el("div", { class: "grid3 even" + (arranging ? " arranging" : "") }, shown.map(([, node]) => node))].filter(Boolean));
     };
     view.append(toolbar(
       rangeControl(T, D, draw),
       segmented("View", T, "measure", MEASURE_OPTIONS, "time", draw),
       segmented("Chart", T, "chart", [["list", "List"], ["pie", "Pie"]], "list", draw),
       selectControl("Show", T, "limit", [["5", "Top 5"], ["10", "Top 10"], ["20", "Top 20"], ["50", "Top 50"], ["all", "All"]], "10", draw),
-      selectControl("User", T, "user", userOpts, "", draw)), content);
-    draw();
-  }
-
-  // ---------- Clients tab (optional feature) ----------
-  function renderClients(view) {
-    const T = "clients", D = "30";
-    const content = el("div", { class: "stack" });
-    const draw = () => {
-      const plays = inRange(state.plays, bounds(T, D));
-      const tracked = plays.filter((p) => p.client || p.location);
-      const loc = locLabel;
-      // Each row opens its plays in History over the same dates.
-      const opener = (make) => ({ hint: (g) => `Open ${g.key} in History`, open: (g) => {
-        const d = make(g);
-        openHistory({ range: rangeOf(T, D), values: d.values, extra: d.extra, origin: { tab: T, label: d.label } });
-      } });
-      const byClient = opener((g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }], label: g.key }));
-      const byLocation = opener((g) => ({ extra: [{ k: "location", v: g.key, l: g.key }], label: g.key }));
-      const byTranscodes = opener((g) => ({ extra: [{ k: "client", v: g.key, l: `Client: ${g.key}` }], values: { stream: STREAM_LABEL.transcode }, label: `${g.key} · transcodes` }));
-      const list = (groups, pick) => barList(groups, (g) => g.key, (g) => hours(g.value), (g) => `${num(g.plays)} plays`, null, 15, pick);
-      content.replaceChildren(
-        el("p", { class: "note range-note", text: `${num(tracked.length)} of ${num(plays.length)} plays in this range have client details. Only plays that started while client tracking was on are covered.` }),
-        el("div", { class: "grid2" },
-          panel("By client", list(groupBy(tracked, (p) => p.client || "Unknown"), byClient)),
-          panel("Local or remote", list(groupBy(tracked, loc), byLocation)),
-          panel("Transcodes by client", list(groupBy(tracked.filter((p) => p.stream === "transcode"), (p) => p.client || "Unknown"), byTranscodes))));
-    };
-    view.append(toolbar(rangeControl(T, D, draw)), content);
+      selectControl("User", T, "user", userOpts, "", draw), arrangeBar), content);
     draw();
   }
 
@@ -1651,7 +1694,7 @@
     const note = () => {
       const f = filters(), o = f && f.origin;
       if (!o) return null;
-      const tabName = { activity: "Activity", users: "Users", breakdown: "Breakdown", clients: "Clients" }[o.tab] || "the report";
+      const tabName = { activity: "Activity", users: "Users", breakdown: "Breakdown" }[o.tab] || "the report";
       // Back returns to the chart itself when this page came from it;
       // a bookmarked drill-down opens that tab instead.
       const goBack = () => {
@@ -1699,6 +1742,18 @@
     return `#${f(0)}${f(8)}${f(4)}`;
   }
   const copy = (c) => JSON.parse(JSON.stringify(c));
+
+  // postSettings saves the page settings (colors, audiobooks, Breakdown
+  // order) in the plugin and returns what was stored. An error with
+  // `expired` set means access to the page ran out.
+  async function postSettings(work) {
+    const res = await fetch("settings", { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(work) });
+    if (res.status === 401 || res.status === 403) throw Object.assign(new Error("expired"), { expired: true });
+    const saved = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(saved.error || `The plugin answered ${res.status}.`);
+    return fullColors(saved);
+  }
 
   // openCustomize shows the page settings: audiobooks and colors. Changes
   // preview live; Cancel returns to what the page had, Save stores them in
@@ -1765,12 +1820,7 @@
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true; msg.textContent = "Saving…"; msg.classList.remove("error");
       try {
-        const res = await fetch("settings", { method: "POST", credentials: "same-origin",
-          headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(work) });
-        if (res.status === 401 || res.status === 403) throw Object.assign(new Error("expired"), { expired: true });
-        const saved = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(saved.error || `The plugin answered ${res.status}.`);
-        state.colors = fullColors(saved);
+        state.colors = await postSettings(work);
         remember(DRAFT_KEY, "");
         close(true);
         applyColors(state.colors); setAudiobooks(state.colors.show_audiobooks); render();
@@ -1792,7 +1842,7 @@
       body, msg,
       el("div", { class: "dlg-foot" },
         el("button", { type: "button", class: "small link", text: "Reset colors",
-          onclick: () => { work = { ...fullColors({ colors: {}, palette: [] }), show_audiobooks: work.show_audiobooks }; drawBody(); preview(); } }),
+          onclick: () => { work = { ...fullColors({ colors: {}, palette: [] }), show_audiobooks: work.show_audiobooks, breakdown_order: work.breakdown_order }; drawBody(); preview(); } }),
         el("span", { class: "grow" }),
         el("button", { type: "button", class: "small", text: "Cancel", onclick: () => close(false) }),
         saveBtn));
@@ -1893,10 +1943,10 @@
   }
 
   // ---------- tabs ----------
-  const RENDER = { activity: renderActivity, users: renderUsers, breakdown: renderBreakdown, clients: renderClients, history: renderHistory };
+  const RENDER = { activity: renderActivity, users: renderUsers, breakdown: renderBreakdown, history: renderHistory };
 
   function render() {
-    if (!RENDER[state.tab] || (state.tab === "clients" && !state.features.clients)) state.tab = "activity";
+    if (!RENDER[state.tab]) state.tab = "activity";
     for (const b of document.querySelectorAll("#tabs button")) {
       const on = b.dataset.tab === state.tab;
       b.setAttribute("aria-selected", String(on));
@@ -1929,7 +1979,6 @@
   wireTabs();
   wireHeader();
   load().then(() => {
-    $("tab-clients").hidden = !state.features.clients;
     showStatus();
     // A link with a view in it wins over the view remembered last time.
     readHash();

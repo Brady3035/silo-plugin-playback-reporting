@@ -80,6 +80,19 @@ select:disabled { opacity: .6; }
 .grid2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .grid3 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
 .grid3.even { align-items: stretch; }
+/* Breakdown: arranging tiles */
+.arrange-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+.arrange-msg { font-size: 13px; color: var(--muted); }
+.arrange-msg:empty { display: none; }
+.arrange-msg.error { color: var(--danger); }
+.arranging .panel { cursor: grab; border-style: dashed; transition: opacity .15s, border-color .15s; }
+.arranging .panel > :not(.tile-move) { pointer-events: none; }
+.arranging .panel.dragging { opacity: .4; }
+.arranging .panel.drop { border-color: var(--accent); border-style: solid; box-shadow: 0 0 0 2px var(--accent-soft); }
+.tile-move { display: flex; align-items: center; gap: 4px; margin: -6px -6px 10px; padding: 2px 4px 2px 8px;
+  border-radius: 8px; background: var(--accent-soft); color: var(--muted); font-size: 12px; }
+.tile-move .grip { font-size: 16px; line-height: 1; }
+.tile-move .grow { flex: 1; }
 
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
