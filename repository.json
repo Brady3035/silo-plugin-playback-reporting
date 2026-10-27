@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "community.playback-reporting",
-        "version": "0.2.8",
+        "version": "0.2.9",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -160,19 +160,19 @@
         }
       },
       "repo_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
-      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.8/checksums.txt",
+      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.9/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.8/plugin-darwin-arm64",
-          "checksum": "11fdbdc84934db5767408bdf9ecaa2f01382b0d5fec7ee3a05514887a451948a"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.9/plugin-darwin-arm64",
+          "checksum": "567118ad016b9ce3245d909d9f25fe538fd0bb1543c17f9a9d0e75f705613755"
         },
         "linux/amd64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.8/plugin-linux-amd64",
-          "checksum": "470285edae3f64980bab5630aff595eedf9b56e0c3da47d414ac0c51ed4d8b3f"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.9/plugin-linux-amd64",
+          "checksum": "af0f9b379b273bc37b8e1bc55521b5d0ab913d88e06bc74cc9e7c31d5abe020f"
         },
         "linux/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.8/plugin-linux-arm64",
-          "checksum": "9f5e9d8dd76b3882f2d4b46ab6c5f77af68e631b4e1e712c2785fa80ad83260e"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.2.9/plugin-linux-arm64",
+          "checksum": "4c20338aa62432f3284e0ca4da6c17ca24311f1ae644dac92ba29af32a7b955b"
         }
       }
     }
