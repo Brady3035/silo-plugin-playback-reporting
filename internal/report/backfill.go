@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/Brady3035/silo-plugin-playback-reporting/internal/silo"
 )
@@ -33,6 +34,18 @@ type BackfillStatus struct {
 
 // maxFailuresInARow stops a backfill when Silo keeps failing.
 const maxFailuresInARow = 20
+
+// Silo limits each account to 20 requests a second by default, shared with
+// the plugin's sync and session polling and the admin's own browsing, so the
+// backfill asks at most every backfillEvery. A 429 waits for Silo's
+// Retry-After (backfillRetryAfter when it sends none, at most a minute) and
+// asks again, up to maxRateLimited times for one item. Vars for tests.
+var (
+	backfillEvery      = 200 * time.Millisecond
+	backfillRetryAfter = 5 * time.Second
+)
+
+const maxRateLimited = 10
 
 // unrestricted reports whether a profile sees the whole catalog.
 func unrestricted(p silo.Profile) bool {
@@ -152,9 +165,23 @@ func (t *Tracker) runBackfill(ctx context.Context, src FormatSource, items []str
 		return
 	}
 	failures := 0
+	pace := time.NewTicker(max(backfillEvery, time.Millisecond))
+	defer pace.Stop()
 	for _, item := range items {
-		versions, err := src.ItemVersions(ctx, profile, item)
+		var versions []silo.FileVersion
 		var status *silo.StatusError
+		for limited := 0; ; limited++ {
+			<-pace.C
+			versions, err = src.ItemVersions(ctx, profile, item)
+			if !errors.As(err, &status) || status.Status != http.StatusTooManyRequests || limited >= maxRateLimited {
+				break
+			}
+			wait := status.RetryAfter
+			if wait <= 0 {
+				wait = backfillRetryAfter
+			}
+			time.Sleep(min(wait, time.Minute))
+		}
 		switch {
 		case errors.As(err, &status) && status.Status == http.StatusNotFound:
 			// The item has left the catalog; its plays keep no format.

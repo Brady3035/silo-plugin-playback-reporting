@@ -3,11 +3,15 @@ package report
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Brady3035/silo-plugin-playback-reporting/internal/silo"
 )
+
+// Tests don't wait between catalog requests.
+func init() { backfillEvery = time.Millisecond }
 
 type fakeCatalog struct {
 	profiles []silo.Profile
@@ -15,12 +19,20 @@ type fakeCatalog struct {
 	err      error
 	asked    []string
 	as       string
+	limited  int // answer this many requests with 429 first
+	mu       sync.Mutex
 }
 
 func (f *fakeCatalog) Profiles(context.Context) ([]silo.Profile, error) { return f.profiles, nil }
 
 func (f *fakeCatalog) ItemVersions(_ context.Context, profileID, itemID string) ([]silo.FileVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.asked, f.as = append(f.asked, itemID), profileID
+	if f.limited > 0 {
+		f.limited--
+		return nil, &silo.StatusError{Status: http.StatusTooManyRequests, RetryAfter: time.Millisecond}
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -100,5 +112,17 @@ func TestBackfillStopsWhenSiloRefuses(t *testing.T) {
 	tr.StartBackfill(src, []Play{{ItemID: "a", FileID: "1"}, {ItemID: "b", FileID: "2"}})
 	if s := waitBackfill(t, tr); s.Error == "" || len(src.asked) != 1 {
 		t.Fatalf("status %+v after %v", s, src.asked)
+	}
+}
+
+func TestBackfillWaitsOutRateLimits(t *testing.T) {
+	tr := NewTracker(nil, memState{}, quiet)
+	src := &fakeCatalog{profiles: []silo.Profile{{ID: "p1"}}, limited: 3, versions: map[string][]silo.FileVersion{
+		"a": {{FileID: "1", Resolution: "1080p"}},
+	}}
+	tr.StartBackfill(src, []Play{{ItemID: "a", FileID: "1"}})
+	s := waitBackfill(t, tr)
+	if s.Error != "" || s.Filled != 1 || s.Missing != 0 || len(src.asked) != 4 {
+		t.Fatalf("status %+v after %d requests", s, len(src.asked))
 	}
 }

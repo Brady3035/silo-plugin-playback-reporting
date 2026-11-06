@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -202,6 +203,8 @@ func (e *NetworkError) Unwrap() error { return e.Err }
 type StatusError struct {
 	Status int
 	Detail string
+	// RetryAfter is Silo's Retry-After on a 429; zero when it sent none.
+	RetryAfter time.Duration
 }
 
 func (e *StatusError) Error() string {
@@ -268,7 +271,11 @@ func (c *Client) getAs(ctx context.Context, profileID, path string, query url.Va
 		if detail == "" {
 			detail = problem.Title
 		}
-		return &StatusError{Status: resp.StatusCode, Detail: detail}
+		e := &StatusError{Status: resp.StatusCode, Detail: detail}
+		if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+			e.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return e
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
