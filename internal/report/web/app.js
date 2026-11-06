@@ -18,13 +18,19 @@
   const $ = (id) => document.getElementById(id);
   const statusEl = $("status");
   const main = $("main");
+  // Plugin pages live under /api/v2/plugin-content/, so Silo's root is
+  // whatever comes before that.
+  const siloRoot = (() => {
+    const marker = location.pathname.indexOf("/api/v2/plugin-content/");
+    return marker > 0 ? location.pathname.slice(0, marker).replace(/\/+$/, "") : "";
+  })();
+  // A media item's page in Silo's app.
+  const itemHref = (id) => id ? `${siloRoot}/item/${encodeURIComponent(id)}` : null;
   // The back link returns to the admin page the report was opened from, or
-  // to the admin home. Plugin pages live under /api/v2/plugin-content/, so
-  // Silo's root is whatever comes before that.
+  // to the admin home.
   (function wireBack() {
     const back = $("back");
-    const marker = location.pathname.indexOf("/api/v2/plugin-content/");
-    const root = marker > 0 ? location.pathname.slice(0, marker).replace(/\/+$/, "") : "";
+    const root = siloRoot;
     let href = root + "/admin";
     try {
       const ref = new URL(document.referrer);
@@ -1295,7 +1301,7 @@
     const cols = [
       { key: "started", label: "Started", cell: (p) => dateTimeFmt.format(new Date(p.started || p.ended)) },
       { key: "who", label: showUser ? "User" : "Profile", kind: "values", value: (p) => (showUser ? who(p) : p.profile) || "(none)" },
-      { key: "title", label: "Title", kind: "text", cls: "title", cell: (p) => playTitle(p) },
+      { key: "title", label: "Title", kind: "text", cls: "title", cell: (p) => playTitle(p), href: (p) => itemHref(p.itemId) },
       { key: "type", label: "Type", kind: "values", value: (p) => CAT_LABEL[p.cat], mark: (p) => el("span", { class: "dot", style: `--c:${catColor(p.cat)}` }) },
       { key: "stream", label: "Stream", kind: "values", value: (p) => STREAM_LABEL[p.stream], pill: (p) => streamColor(p.stream) },
       { key: "watched", label: "Watched", kind: "min", cls: "num",
@@ -1447,6 +1453,8 @@
         return th;
       }))),
       el("tbody", {}, page.map((p) => el("tr", {}, cols.map((c) => {
+        const href = c.href && c.href(p);
+        if (href) return el("td", { class: c.cls }, el("a", { class: "item-link", href, title: "Open in Silo", text: c.cell(p) }));
         if (c.kind !== "values") {
           return el("td", { class: [c.cls, c.key === "watched" && p.estimated ? "est" : null].filter(Boolean).join(" ") || null,
             title: c.key === "watched" && p.estimated ? "Estimated: recorded before Silo measured watch time" : null, text: c.cell(p) });

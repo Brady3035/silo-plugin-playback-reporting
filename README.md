@@ -20,7 +20,7 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 - **Breakdown**: shares by user, stream type and (with *Track clients* on) client, then top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other). **Arrange tiles** lets you drag the tiles (or use the arrows) into the order you want; **Save order** saves it for everyone who opens the report.
 - **History**: every play in a range, with CSV export.
 
-The session tables on **Users** and **History** filter by column: click a value in a row (a user, a type, a stream, Done) to show only rows with it, or open the funnel in a column header to tick values, type a title, or set a minimum watch time. Active filters show as chips above the table, and **Export CSV** exports what's shown.
+The session tables on **Users** and **History** filter by column: click a value in a row (a user, a type, a stream, Done) to show only rows with it, or open the funnel in a column header to tick values, type a title, or set a minimum watch time. Click a title to open that movie, episode or book in Silo. Active filters show as chips above the table, and **Export CSV** exports what's shown.
 
 **Smart plays** = watch time ÷ length of the movie, episode or book. Two half-watched episodes count as one episode watched; a movie watched twice counts 2×.
 
