@@ -1454,7 +1454,11 @@
       }))),
       el("tbody", {}, page.map((p) => el("tr", {}, cols.map((c) => {
         const href = c.href && c.href(p);
-        if (href) return el("td", { class: c.cls }, el("a", { class: "item-link", href, title: "Open in Silo", text: c.cell(p) }));
+        if (href) {
+          const a = el("a", { class: "item-link", href, title: "Open in Silo", text: c.cell(p) });
+          warmOnIntent(a);
+          return el("td", { class: c.cls }, a);
+        }
         if (c.kind !== "values") {
           return el("td", { class: [c.cls, c.key === "watched" && p.estimated ? "est" : null].filter(Boolean).join(" ") || null,
             title: c.key === "watched" && p.estimated ? "Estimated: recorded before Silo measured watch time" : null, text: c.cell(p) });
