@@ -16,9 +16,10 @@ import (
 )
 
 // Client tracking (the opt-in "Track clients" setting). Silo's playback
-// history does not record which app played or from where, but its live
+// history records the client only for plays since late October 2026, and
+// never the effective play method or the file's format, but its live
 // sessions do, so the tracker polls them and remembers each session's client
-// for good: history never gains it, so the report joins on these notes.
+// for good; the report joins on these notes.
 //
 // The notes live in the host's per-installation state store: at most 256
 // keys of 256 KiB, and keys can't be deleted. Sessions are grouped by the
@@ -27,12 +28,17 @@ import (
 // to slots. A save rewrites only the months that changed (normally the
 // current one) into free slots, then the index, so a crash mid-save leaves
 // the previous copy intact. When the pool is full, the oldest months go.
+//
+// The tracker also remembers the source format of each file it sees played,
+// gzipped into one more key (clients/formats). History names the file of
+// every play, so any play of a file seen once gets its format.
 const (
 	clientPollEvery = 15 * time.Second
 	clientSaveEvery = 5 * time.Minute
 
-	stateKeyIndex  = "clients/index"
-	stateKeyPrefix = "clients/" // + slot number
+	stateKeyIndex   = "clients/index"
+	stateKeyFormats = "clients/formats"
+	stateKeyPrefix  = "clients/" // + slot number
 	// stateKeyCount is the old layout's chunk count (plain JSON chunks in
 	// clients/0…n-1); it's read once to migrate and then set to 0.
 	stateKeyCount = "clients/count"
@@ -53,6 +59,14 @@ type ClientInfo struct {
 	Method string `json:"m,omitempty"`
 	Seen   int64  `json:"s"`           // unix seconds the session was last observed
 	First  int64  `json:"f,omitempty"` // unix seconds it was first observed; picks its month
+}
+
+// FileFormat is a media file's source format, as live sessions report it.
+type FileFormat struct {
+	Resolution string `json:"r,omitempty"` // 2160p, 1080p, ...
+	Video      string `json:"v,omitempty"` // hevc, h264, ...
+	Audio      string `json:"a,omitempty"` // truehd, eac3, ...
+	Channels   int    `json:"c,omitempty"`
 }
 
 // month is the UTC month a session belongs to, from when it was first seen.
@@ -102,12 +116,27 @@ type Tracker struct {
 	strs map[string]string
 	// changes counts updates, so cached page data can tell it is stale.
 	changes uint64
+	// files maps file IDs to their formats; filesDirty is set until saved.
+	files      map[string]FileFormat
+	filesDirty bool
 }
 
 // NewTracker returns a tracker; Run starts it.
 func NewTracker(reader SessionReader, state StateStore, logger *slog.Logger) *Tracker {
 	return &Tracker{reader: reader, state: state, logger: logger, now: time.Now, sessions: map[string]ClientInfo{},
-		dirty: map[string]bool{}, index: slotIndex{Version: 2, Months: map[string][]int{}}, strs: map[string]string{}}
+		dirty: map[string]bool{}, index: slotIndex{Version: 2, Months: map[string][]int{}}, strs: map[string]string{},
+		files: map[string]FileFormat{}}
+}
+
+// Format returns the source format of a file, if the tracker has seen it.
+func (t *Tracker) Format(fileID string) (FileFormat, bool) {
+	if t == nil || fileID == "" {
+		return FileFormat{}, false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	f, ok := t.files[fileID]
+	return f, ok
 }
 
 // Lookup returns what is known about a session.
@@ -166,6 +195,7 @@ func (t *Tracker) Run(ctx context.Context) {
 func (t *Tracker) poll(ctx context.Context) {
 	now := t.now().Unix()
 	seen := map[string]ClientInfo{}
+	formats := map[string]FileFormat{}
 	cursor := ""
 	for range 100 {
 		items, next, err := t.reader.SessionsPage(ctx, cursor)
@@ -184,6 +214,13 @@ func (t *Tracker) poll(ctx context.Context) {
 				client = strings.TrimSpace(s.ClientLabel)
 			}
 			seen[s.SessionID] = ClientInfo{Client: client, Location: s.StreamLocation, Method: s.EffectivePlayMethod, Seen: now, First: now}
+			f := FileFormat{Resolution: s.SourceVideoResolution, Video: s.SourceVideoCodec, Audio: s.SourceAudioCodec}
+			if s.SourceAudioChannels != nil {
+				f.Channels = *s.SourceAudioChannels
+			}
+			if s.MediaFileID != "" && s.MediaFileID != "0" && f != (FileFormat{}) {
+				formats[s.MediaFileID] = f
+			}
 		}
 		if next == "" || next == cursor {
 			break
@@ -193,6 +230,13 @@ func (t *Tracker) poll(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.lastErr = ""
+	for id, f := range formats {
+		if t.files[id] != f {
+			t.files[id] = f
+			t.filesDirty = true
+			t.changes++
+		}
+	}
 	for id, info := range seen {
 		old, ok := t.sessions[id]
 		// Keep the first non-empty client and the most transcoded method a
@@ -250,6 +294,9 @@ func (t *Tracker) load(ctx context.Context) bool {
 	if t.state == nil {
 		return true
 	}
+	if !t.loadFormats(ctx) {
+		return false
+	}
 	raw, ok, err := t.state.ReadInstanceState(ctx, stateKeyIndex)
 	if err != nil {
 		return false
@@ -278,6 +325,63 @@ func (t *Tracker) load(ctx context.Context) bool {
 	t.mergeLocked(loaded)
 	t.mu.Unlock()
 	return true
+}
+
+// loadFormats reads the saved file formats; formats seen live since start
+// win over saved ones.
+func (t *Tracker) loadFormats(ctx context.Context) bool {
+	raw, ok, err := t.state.ReadInstanceState(ctx, stateKeyFormats)
+	if err != nil {
+		return false
+	}
+	if !ok || len(raw) == 0 {
+		return true
+	}
+	var saved map[string]FileFormat
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil || json.NewDecoder(zr).Decode(&saved) != nil {
+		return true
+	}
+	t.mu.Lock()
+	for id, f := range saved {
+		if _, live := t.files[id]; !live {
+			t.files[id] = f
+		}
+	}
+	t.changes++
+	t.mu.Unlock()
+	return true
+}
+
+// saveFormats writes the file formats when they changed.
+func (t *Tracker) saveFormats(ctx context.Context) {
+	t.mu.Lock()
+	if !t.filesDirty {
+		t.mu.Unlock()
+		return
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	err := json.NewEncoder(zw).Encode(t.files)
+	if err == nil {
+		err = zw.Close()
+	}
+	t.filesDirty = false
+	t.mu.Unlock()
+	if err == nil && buf.Len() > maxSlotBytes {
+		// Retrying wouldn't shrink it; the saved copy stays as it was.
+		t.logger.Warn("file formats are too large to save", "bytes", buf.Len())
+		return
+	}
+	if err == nil {
+		err = t.state.WriteInstanceState(ctx, stateKeyFormats, buf.Bytes())
+	}
+	if err != nil {
+		t.logger.Warn("saving file formats failed", "error", err)
+		t.mu.Lock()
+		t.filesDirty = true
+		t.mu.Unlock()
+	}
 }
 
 // loadOld reads the first layout (clients/count plain JSON chunks) and marks
@@ -395,6 +499,7 @@ func (t *Tracker) save(ctx context.Context) {
 	if t.state == nil {
 		return
 	}
+	t.saveFormats(ctx)
 	t.mu.Lock()
 	if len(t.dirty) == 0 {
 		t.mu.Unlock()

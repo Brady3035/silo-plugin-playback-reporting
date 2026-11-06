@@ -4,6 +4,7 @@ package report
 
 import (
 	"math"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ type Play struct {
 	User      string
 	Profile   string
 	ItemID    string
+	FileID    string // the file played; empty when Silo didn't say
 	Title     string
 	Series    string
 	Season    int // 0 when not an episode
@@ -34,6 +36,10 @@ type Play struct {
 	Estimated bool
 	Duration  float64 // media length; 0 when unknown
 	Completed bool
+	// Client and Location from Silo's history, for plays the tracker
+	// didn't see live; empty on plays recorded before Silo kept them.
+	Client   string
+	Location string
 }
 
 // WatchedSeconds is how long entry was watched, and whether that is an
@@ -57,6 +63,7 @@ func PlayFrom(entry silo.HistoryEntry) Play {
 		User:      entry.Username,
 		Profile:   entry.ProfileName,
 		ItemID:    entry.MediaItemID,
+		FileID:    entry.MediaFileID,
 		Title:     entry.MediaTitle,
 		Series:    entry.SeriesTitle,
 		Type:      entry.MediaType,
@@ -82,7 +89,29 @@ func PlayFrom(entry silo.HistoryEntry) Play {
 	if entry.EpisodeNumber != nil {
 		p.Episode = *entry.EpisodeNumber
 	}
+	if p.FileID == "0" {
+		p.FileID = ""
+	}
+	if entry.ClientName != nil {
+		p.Client = strings.TrimSpace(*entry.ClientName)
+	}
+	if entry.ClientIP != nil {
+		p.Location = locationOf(*entry.ClientIP)
+	}
 	return p
+}
+
+// locationOf classifies a client address as Silo does when a session has no
+// stream location: private, loopback and link-local addresses are local.
+func locationOf(ip string) string {
+	addr := net.ParseIP(strings.TrimSpace(ip))
+	switch {
+	case addr == nil:
+		return ""
+	case addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast():
+		return "local"
+	}
+	return "remote"
 }
 
 // Store holds every play by session ID, so a play Silo finalizes again

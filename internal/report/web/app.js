@@ -225,9 +225,25 @@
     return "other";
   }
 
+  // Labels for a file's source format, as the session tables show it.
+  const RES_LABEL = { "4320p": "8K", "8k": "8K", "2160p": "4K", "4k": "4K", uhd: "4K" };
+  const VIDEO_LABEL = { hevc: "HEVC", h265: "HEVC", h264: "H.264", avc: "H.264", av1: "AV1", vp9: "VP9", mpeg2video: "MPEG-2", mpeg4: "MPEG-4", vc1: "VC-1" };
+  const AUDIO_LABEL = { truehd: "TrueHD", eac3: "E-AC-3", ac3: "AC-3", dts: "DTS", aac: "AAC", flac: "FLAC", opus: "Opus", mp3: "MP3", vorbis: "Vorbis", alac: "ALAC" };
+  const CHANNELS = { 1: "Mono", 2: "2.0", 3: "2.1", 6: "5.1", 7: "6.1", 8: "7.1" };
+  function formatLabels(f) {
+    const audio = f.a ? (AUDIO_LABEL[f.a.toLowerCase()] || f.a.toUpperCase()) : "";
+    return {
+      res: f.r ? RES_LABEL[f.r.toLowerCase()] || f.r : "",
+      video: f.v ? VIDEO_LABEL[f.v.toLowerCase()] || f.v.toUpperCase() : "",
+      audio: audio && f.c ? `${audio} ${CHANNELS[f.c] || f.c + "ch"}` : audio,
+    };
+  }
+  const NO_FORMAT = { res: "", video: "", audio: "" };
+
   function decode(chunk) {
     const col = Object.fromEntries(chunk.columns.map((c, i) => [c, i]));
     const d = chunk.dict;
+    const formats = (d.formats || []).map(formatLabels);
     return chunk.plays.map((r) => {
       const user = d.users[r[col.user]] || ["", ""];
       const title = d.titles[r[col.title]] || ["", ""];
@@ -253,6 +269,7 @@
         estimated: (r[col.flags] & 2) !== 0,
         client: r[col.client] >= 0 ? d.clients[r[col.client]] : "",
         location: r[col.location] >= 0 ? d.locations[r[col.location]] : "",
+        format: formats[r[col.format]] || NO_FORMAT,
       };
     });
   }
@@ -1311,6 +1328,12 @@
     if (state.features.clients) {
       cols.push({ key: "client", label: "Client", kind: "values",
         value: (p) => [p.client, { local: "Local", remote: "Remote" }[p.location]].filter(Boolean).join(" · ") || "Unknown" });
+      // The played file's source format, known once the tracker has seen
+      // the file played live.
+      cols.push(
+        { key: "res", label: "Resolution", kind: "values", value: (p) => p.format.res || "Unknown" },
+        { key: "video", label: "Video", kind: "values", value: (p) => p.format.video || "Unknown" },
+        { key: "audio", label: "Audio", kind: "values", value: (p) => p.format.audio || "Unknown" });
     }
     return cols;
   }
@@ -1732,9 +1755,10 @@
 
   function csv(plays) {
     const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
-    const lines = [["ended_at", "started_at", "user", "profile", "title", "series", "season", "episode", "type", "stream", "watched_seconds", "watched_is_estimate", "duration_seconds", "smart_plays", "completed", "client", "location"].join(",")];
+    const lines = [["ended_at", "started_at", "user", "profile", "title", "series", "season", "episode", "type", "stream", "watched_seconds", "watched_is_estimate", "duration_seconds", "smart_plays", "completed", "client", "location", "resolution", "video", "audio"].join(",")];
     for (const p of plays) lines.push([new Date(p.ended).toISOString(), new Date(p.started).toISOString(), p.user, p.profile, p.title, p.series,
-      p.series ? p.season : "", p.series ? p.episode : "", p.type, p.stream, p.watched, p.estimated, p.duration || "", p.smart.toFixed(3), p.completed, p.client, p.location].map(q).join(","));
+      p.series ? p.season : "", p.series ? p.episode : "", p.type, p.stream, p.watched, p.estimated, p.duration || "", p.smart.toFixed(3), p.completed, p.client, p.location,
+      p.format.res, p.format.video, p.format.audio].map(q).join(","));
     const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
     const a = el("a", { href: URL.createObjectURL(blob), download: `playback-history-${isoDay(Date.now())}.csv` });
     document.body.append(a); a.click(); a.remove();

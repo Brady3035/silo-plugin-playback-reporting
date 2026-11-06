@@ -195,6 +195,47 @@ func TestEncodeChunksSplitsAndIndexes(t *testing.T) {
 	}
 }
 
+func TestEncodeChunksFallsBackToHistoryClientAndAddsFormat(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	tracked := entry("tracked", base, 60, ptr(42.0))
+	tracked.MediaFileID = "77"
+	missed := entry("missed", base, 60, ptr(42.0))
+	missed.MediaFileID, missed.ClientName, missed.ClientIP = "77", ptr("Silo for Android"), ptr("192.168.1.20")
+	old := entry("old", base, 60, ptr(42.0))
+	plays := []Play{PlayFrom(tracked), PlayFrom(missed), PlayFrom(old)}
+	tracker := &Tracker{sessions: map[string]ClientInfo{"tracked": {Client: "Silo for iOS", Location: "remote"}},
+		files: map[string]FileFormat{"77": {Resolution: "2160p", Video: "hevc", Audio: "truehd", Channels: 8}}}
+
+	chunks, err := encodeChunks("snap", plays, Status{Ready: true}, features{Clients: true}, tracker, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c chunk
+	_ = json.Unmarshal(gunzip(t, chunks[0]), &c)
+	col := map[string]int{}
+	for i, name := range c.Columns {
+		col[name] = i
+	}
+	at := func(row int, name string) int { return int(c.Plays[row][col[name]].(float64)) }
+	if c.Dict.Clients[at(0, "client")] != "Silo for iOS" || c.Dict.Clients[at(1, "client")] != "Silo for Android" ||
+		c.Dict.Locations[at(1, "location")] != "local" || at(2, "client") != -1 || at(2, "location") != -1 {
+		t.Fatalf("clients decode wrong: %v with %+v", c.Plays, c.Dict)
+	}
+	if f := c.Dict.Formats; len(f) != 1 || at(0, "format") != 0 || at(1, "format") != 0 || at(2, "format") != -1 ||
+		f[0] != (FileFormat{Resolution: "2160p", Video: "hevc", Audio: "truehd", Channels: 8}) {
+		t.Fatalf("formats decode wrong: %v with %+v", c.Plays, c.Dict.Formats)
+	}
+}
+
+func TestLocationOf(t *testing.T) {
+	for ip, want := range map[string]string{"10.0.0.4": "local", "127.0.0.1": "local", "fe80::1": "local",
+		"fd00::2": "local", "203.0.113.9": "remote", "": "", "nonsense": ""} {
+		if got := locationOf(ip); got != want {
+			t.Errorf("locationOf(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}
+
 func request(path, role string, query map[string]any) *pluginv1.HandleHTTPRequest {
 	q, _ := structpb.NewStruct(query)
 	return &pluginv1.HandleHTTPRequest{Method: "GET", Path: path, Headers: map[string]string{"X-Silo-User-Role": role}, Query: q}
@@ -303,6 +344,22 @@ func TestTrackerKeepsClientsAndTheMostTranscodedMethod(t *testing.T) {
 	}
 	if got, _ := tr.Lookup("s2"); got.Client != "Infuse 8" {
 		t.Fatalf("s2 falls back to the client label: %+v", got)
+	}
+
+	f.pages = [][]silo.LiveSession{{{SessionID: "s3", MediaFileID: "9", SourceVideoResolution: "1080p",
+		SourceVideoCodec: "h264", SourceAudioCodec: "eac3", SourceAudioChannels: ptr(6)}}}
+	tr.poll(t.Context())
+	want := FileFormat{Resolution: "1080p", Video: "h264", Audio: "eac3", Channels: 6}
+	if got, ok := tr.Format("9"); !ok || got != want {
+		t.Fatalf("format of file 9 = %+v %v", got, ok)
+	}
+	tr.save(t.Context())
+	restored := NewTracker(nil, state, quiet)
+	if !restored.load(t.Context()) {
+		t.Fatal("load failed")
+	}
+	if got, ok := restored.Format("9"); !ok || got != want {
+		t.Fatalf("restored format of file 9 = %+v %v", got, ok)
 	}
 
 }

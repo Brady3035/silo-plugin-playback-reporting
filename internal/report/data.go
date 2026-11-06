@@ -29,7 +29,7 @@ const (
 // Row columns, in order, as the page reads them (app.js mirrors this list).
 var rowColumns = []string{
 	"ended", "started", "user", "profile", "title", "series", "season", "episode",
-	"type", "method", "watched", "duration", "flags", "client", "location", "live_method",
+	"type", "method", "watched", "duration", "flags", "client", "location", "live_method", "format",
 }
 
 // Row flags.
@@ -64,14 +64,15 @@ type features struct {
 
 // dict holds each chunk's repeated strings once; rows refer to them by index.
 type dict struct {
-	Users     [][2]string `json:"users"` // [id, name]
-	Profiles  []string    `json:"profiles"`
-	Titles    [][2]string `json:"titles"` // [item id, title]
-	Series    []string    `json:"series"`
-	Types     []string    `json:"types"`
-	Methods   []string    `json:"methods"`
-	Clients   []string    `json:"clients"`
-	Locations []string    `json:"locations"`
+	Users     [][2]string  `json:"users"` // [id, name]
+	Profiles  []string     `json:"profiles"`
+	Titles    [][2]string  `json:"titles"` // [item id, title]
+	Series    []string     `json:"series"`
+	Types     []string     `json:"types"`
+	Methods   []string     `json:"methods"`
+	Clients   []string     `json:"clients"`
+	Locations []string     `json:"locations"`
+	Formats   []FileFormat `json:"formats"`
 }
 
 type interner struct {
@@ -122,6 +123,7 @@ func encodeChunksOf(playsPerChunk int, id string, plays []Play, status Status, f
 		methods := &interner{map[string]int{}}
 		clientNames := &interner{map[string]int{}}
 		locations := &interner{map[string]int{}}
+		formats := map[FileFormat]int{}
 		for _, p := range part {
 			u, ok := users[p.UserID]
 			if !ok {
@@ -143,23 +145,39 @@ func encodeChunksOf(playsPerChunk int, id string, plays []Play, status Status, f
 			if p.Estimated {
 				flags |= flagEstimated
 			}
-			client, location, liveMethod := -1, -1, -1
-			if info, ok := clients.Lookup(p.SessionID); ok {
-				if info.Client != "" {
-					client = clientNames.add(&c.Dict.Clients, info.Client)
+			// What the tracker saw live comes first; Silo's history fills in
+			// plays it missed.
+			client, location, liveMethod, format := -1, -1, -1, -1
+			info, _ := clients.Lookup(p.SessionID)
+			if info.Client == "" {
+				info.Client = p.Client
+			}
+			if info.Location == "" {
+				info.Location = p.Location
+			}
+			if info.Client != "" {
+				client = clientNames.add(&c.Dict.Clients, info.Client)
+			}
+			if info.Location != "" {
+				location = locations.add(&c.Dict.Locations, info.Location)
+			}
+			if info.Method != "" {
+				liveMethod = methods.add(&c.Dict.Methods, info.Method)
+			}
+			if f, ok := clients.Format(p.FileID); ok {
+				i, seen := formats[f]
+				if !seen {
+					i = len(c.Dict.Formats)
+					formats[f] = i
+					c.Dict.Formats = append(c.Dict.Formats, f)
 				}
-				if info.Location != "" {
-					location = locations.add(&c.Dict.Locations, info.Location)
-				}
-				if info.Method != "" {
-					liveMethod = methods.add(&c.Dict.Methods, info.Method)
-				}
+				format = i
 			}
 			c.Plays = append(c.Plays, []any{
 				p.Ended.Unix(), p.Started.Unix(), u, profiles.add(&c.Dict.Profiles, p.Profile), t,
 				series.add(&c.Dict.Series, p.Series), p.Season, p.Episode,
 				types.add(&c.Dict.Types, p.Type), methods.add(&c.Dict.Methods, p.Method),
-				int64(math.Round(p.Watched)), int64(math.Round(p.Duration)), flags, client, location, liveMethod,
+				int64(math.Round(p.Watched)), int64(math.Round(p.Duration)), flags, client, location, liveMethod, format,
 			})
 		}
 		normalize(&c.Dict)
@@ -188,6 +206,9 @@ func normalize(d *dict) {
 	}
 	if d.Titles == nil {
 		d.Titles = [][2]string{}
+	}
+	if d.Formats == nil {
+		d.Formats = []FileFormat{}
 	}
 }
 

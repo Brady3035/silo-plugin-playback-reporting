@@ -42,6 +42,7 @@ type HistoryEntry struct {
 	ProfileID            string    `json:"profile_id"`
 	ProfileName          string    `json:"profile_name"`
 	MediaItemID          string    `json:"media_item_id"`
+	MediaFileID          string    `json:"media_file_id"`
 	MediaTitle           string    `json:"media_title"`
 	MediaType            string    `json:"media_type"`
 	PlayMethod           string    `json:"play_method"`
@@ -56,6 +57,9 @@ type HistoryEntry struct {
 	SeriesTitle          string    `json:"series_title"`
 	SeasonNumber         *int      `json:"season_number"`
 	EpisodeNumber        *int      `json:"episode_number"`
+	// Recorded by Silo since late October 2026; nil on older plays.
+	ClientName *string `json:"client_name"`
+	ClientIP   *string `json:"client_ip"`
 }
 
 // LiveSession is the part of GET /api/v2/admin/sessions the client report uses.
@@ -65,6 +69,12 @@ type LiveSession struct {
 	ClientLabel         string `json:"client_label"`
 	StreamLocation      string `json:"stream_location"`
 	EffectivePlayMethod string `json:"effective_play_method"`
+	// The file being played and its source format.
+	MediaFileID           string `json:"media_file_id"`
+	SourceVideoResolution string `json:"source_video_resolution"`
+	SourceVideoCodec      string `json:"source_video_codec"`
+	SourceAudioCodec      string `json:"source_audio_codec"`
+	SourceAudioChannels   *int   `json:"source_audio_channels"`
 }
 
 type page[T any] struct {

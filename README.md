@@ -18,7 +18,7 @@ An admin page with playback statistics, in the spirit of Emby's Playback Reporti
 - **Activity**: a bar graph of watch time, plays or smart plays per day, week or month (picked from the date range). Stack by user, media type or stream type; **Separate profiles** splits each account into its profiles. Filter to Movies, TV shows or Audiobooks. Includes a weekday × hour heatmap. Click a user (or profile) in the list under the chart to open them on the Users tab over the same dates.
 - **Users**: pick a user (and optionally one profile). Totals for movies, TV and audiobooks, a donut of Direct Play / Remux / Transcode, a donut of what they watch, and a paged list of every session with CSV export. **All time** spans that user's own first to last play.
 - **Breakdown**: shares by user, stream type and (with *Track clients* on) client, then top Movies, TV shows and Audiobooks, viewed by Plays, Time or Smart plays, as a ranked list or a pie chart of the top 5, 10, 20 or 50 (the rest grouped as Other). **Arrange tiles** lets you drag the tiles (or use the arrows) into the order you want; **Save order** saves it for everyone who opens the report.
-- **History**: every play in a range, with CSV export.
+- **History**: every play in a range, with CSV export. With *Track clients* on, it also shows each play's client and the played file's resolution, video and audio format.
 
 The session tables on **Users** and **History** filter by column: click a value in a row (a user, a type, a stream, Done) to show only rows with it, or open the funnel in a column header to tick values, type a title, or set a minimum watch time. Click a title to open that movie, episode or book in Silo. Active filters show as chips above the table, and **Export CSV** exports what's shown.
 
@@ -31,6 +31,10 @@ When the plugin starts it checks, in order: that it can find and reach Silo, tha
 ## Client tracking storage
 
 With **Track clients** on, each play's client, local/remote and play method are kept in the plugin's storage in Silo (no database of its own). Sessions are grouped by the month they were first seen and gzipped into a fixed pool of 240 storage slots, so it holds about 2 million sessions (about 29 bytes each). Every 5 minutes only the months that changed are rewritten, into free slots before the index moves to them, so a crash can't leave a half-written month. If the pool fills up, the oldest months are dropped first. Notes saved by older versions are converted on first start.
+
+The tracker also remembers the source format (resolution, video codec, audio codec and channels) of each file it sees played, in one more storage key. Silo's history names the file of every play, so once a file has been seen playing, all its plays show its format, older ones included. Files never played while the tracker was running show as Unknown.
+
+Plays the tracker missed (shorter than a poll, or played while the plugin was off) take their client and local/remote from Silo's own history, which records them for plays since late October 2026. Local/remote is worked out from the client's address the way Silo does it: private, loopback and link-local addresses count as local.
 
 ## Customize
 
@@ -49,7 +53,7 @@ Changes preview live and are saved by the plugin for everyone who opens the repo
 | | Server address | Optional; leave empty to use Silo's internal address. |
 | Report filters | Hide plays shorter than (seconds) | Leaves short plays out of every report. |
 | | Ignore list | One per line: `username` hides an account, `username/profile` hides one profile. Case-insensitive. |
-| Optional reports | Track clients | Polls live sessions every 15 s to record client app, local/remote and the actual play method, for the Clients tile on Breakdown and the History filters. Off by default. |
+| Optional reports | Track clients | Polls live sessions every 15 s to record client app, local/remote, the actual play method and each file's format, for the Clients tile on Breakdown and the Client, Resolution, Video and Audio columns on Users and History. Off by default. |
 
 Filters and the ignore list only hide plays in the reports. Silo's history is never changed. The page's status line shows how many plays are hidden.
 
