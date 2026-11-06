@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "community.playback-reporting",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -141,6 +141,18 @@
             "access": "admin"
           },
           {
+            "id": "formats-backfill-status",
+            "method": "GET",
+            "path": "/formats/backfill",
+            "access": "admin"
+          },
+          {
+            "id": "formats-backfill",
+            "method": "POST",
+            "path": "/formats/backfill",
+            "access": "admin"
+          },
+          {
             "id": "assets",
             "method": "GET",
             "path": "/assets/*",
@@ -160,19 +172,19 @@
         }
       },
       "repo_url": "https://github.com/Brady3035/silo-plugin-playback-reporting",
-      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.4.0/checksums.txt",
+      "checksums_url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.5.0/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.4.0/plugin-darwin-arm64",
-          "checksum": "e465c425ce5bba191a3d6bb2d6a4f07113b0977cbfc8532eabc34fc3af38f8ac"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.5.0/plugin-darwin-arm64",
+          "checksum": "98bb763947c0830902f9d5217593945bd1ca79ca9c6133cfa4523e8f7db76feb"
         },
         "linux/amd64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.4.0/plugin-linux-amd64",
-          "checksum": "67595c2d74145462324b4a9bcd90755e80252f14f58e2152e6cd54e35626d47d"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.5.0/plugin-linux-amd64",
+          "checksum": "36e8a000ae37e208355f8fc8f06072ee7f4ae36707b7a0ecd5cd7340fe00ebb1"
         },
         "linux/arm64": {
-          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.4.0/plugin-linux-arm64",
-          "checksum": "e3707c867d7ec790a360e224862a995d3b11578dcffae0ac2bc0fd22fa81e030"
+          "url": "https://github.com/Brady3035/silo-plugin-playback-reporting/releases/download/v0.5.0/plugin-linux-arm64",
+          "checksum": "fdae96d015088bf8153ecfb7e2a5a8d585f2ed9633595a7ba6ea8af63a3dba5f"
         }
       }
     }
