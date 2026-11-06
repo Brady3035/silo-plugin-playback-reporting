@@ -136,6 +136,47 @@ func (c *Client) Account(ctx context.Context) (Account, error) {
 	return out, err
 }
 
+// Profile is the part of GET /api/v2/profiles the format backfill uses to
+// pick a profile that sees the whole catalog.
+type Profile struct {
+	ID                         string `json:"id"`
+	Name                       string `json:"name"`
+	IsPrimary                  bool   `json:"is_primary"`
+	IsChild                    bool   `json:"is_child"`
+	MaxContentRating           string `json:"max_content_rating"`
+	MaxAdvisoryAge             *int   `json:"max_advisory_age"`
+	LibraryRestrictionsEnabled bool   `json:"library_restrictions_enabled"`
+}
+
+// Profiles lists the profiles of the API key's account.
+func (c *Client) Profiles(ctx context.Context) ([]Profile, error) {
+	var out page[Profile]
+	err := c.get(ctx, "/api/v2/profiles", url.Values{}, &out)
+	return out.Items, err
+}
+
+// FileVersion is the part of one playable file of an item the format
+// backfill uses.
+type FileVersion struct {
+	FileID      string `json:"file_id"`
+	Resolution  string `json:"resolution"`
+	CodecVideo  string `json:"codec_video"`
+	CodecAudio  string `json:"codec_audio"`
+	AudioTracks []struct {
+		Codec    string `json:"codec"`
+		Channels int    `json:"channels"`
+		Default  bool   `json:"default"`
+	} `json:"audio_tracks"`
+}
+
+// ItemVersions lists an item's files as profileID sees them; the catalog
+// answers only on a profile's behalf.
+func (c *Client) ItemVersions(ctx context.Context, profileID, itemID string) ([]FileVersion, error) {
+	var out page[FileVersion]
+	err := c.getAs(ctx, profileID, "/api/v2/catalog/items/"+url.PathEscape(itemID)+"/versions", url.Values{}, &out)
+	return out.Items, err
+}
+
 // ProbeHistory reads one history entry, to check the key can.
 func (c *Client) ProbeHistory(ctx context.Context) error {
 	var out page[json.RawMessage]
@@ -188,6 +229,11 @@ func Explain(err error) string {
 }
 
 func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+	return c.getAs(ctx, "", path, query, out)
+}
+
+// getAs is get on behalf of a profile (X-Profile-Id), when profileID is set.
+func (c *Client) getAs(ctx context.Context, profileID, path string, query url.Values, out any) error {
 	if c.key == "" {
 		return errors.New("no API key is configured")
 	}
@@ -197,6 +243,9 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 	}
 	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Accept", "application/json")
+	if profileID != "" {
+		req.Header.Set("X-Profile-Id", profileID)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return &NetworkError{Err: err}

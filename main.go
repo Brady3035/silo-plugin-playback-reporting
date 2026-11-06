@@ -62,6 +62,7 @@ func (a *app) configure(_ context.Context, entries []*pluginv1.ConfigEntry) erro
 			go tracker.Run(context.Background())
 		}
 		a.handler.Configure(syncer, tracker, "")
+		a.handler.SetFormatSource(lazy)
 		check := func(ctx context.Context) report.CheckResult {
 			return report.RunCheck(ctx, lazy, cfg.TrackClients, time.Now())
 		}
@@ -182,6 +183,22 @@ func (l *lazyClient) HistoryPage(ctx context.Context, endedAfter time.Time, curs
 		return nil, "", err
 	}
 	return c.HistoryPage(ctx, endedAfter, cursor)
+}
+
+func (l *lazyClient) Profiles(ctx context.Context) ([]silo.Profile, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Profiles(ctx)
+}
+
+func (l *lazyClient) ItemVersions(ctx context.Context, profileID, itemID string) ([]silo.FileVersion, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.ItemVersions(ctx, profileID, itemID)
 }
 
 func (l *lazyClient) SessionsPage(ctx context.Context, cursor string) ([]silo.LiveSession, string, error) {

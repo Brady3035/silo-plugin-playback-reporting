@@ -1516,10 +1516,51 @@
         rows.some((p) => p.estimated) ? el("p", { class: "note", text: "≈ marks plays recorded before Silo measured watch time; their watch time is an estimate." }) : null].filter(Boolean));
     };
     draw();
+    const fill = pageKey === "history" && state.features.clients && plays.some((p) => p.format === NO_FORMAT) ? fillFormatsButton() : null;
     return el("section", { class: "panel sessions" },
-      el("div", { class: "panel-head" }, count, exportBtn),
+      el("div", { class: "panel-head" }, count, el("div", { class: "head-actions" }, fill, exportBtn)),
       el("div", { class: "table-tools" }, search, chips),
       box);
+  }
+
+  // fillFormatsButton asks the plugin to look up, once, the formats of files
+  // the client tracker never saw played, and follows its progress. The
+  // plugin keeps going if the page is closed or its access runs out.
+  function fillFormatsButton() {
+    const btn = el("button", { type: "button", class: "small", text: "Fill in formats",
+      title: "Look up the resolution, video and audio of files played before the plugin tracked them" });
+    const say = (text, title) => { btn.textContent = text; btn.title = title || ""; };
+    const ask = async (method) => {
+      const res = await fetch("formats/backfill", { method, credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" }, body: method === "POST" ? "{}" : undefined });
+      if (res.status === 401 || res.status === 403) throw Object.assign(new Error("expired"), { expired: true });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `The plugin answered ${res.status}.`);
+      return body;
+    };
+    const follow = async (s) => {
+      while (s.running) {
+        say(s.items ? `Looking up ${num(s.done)} of ${num(s.items)}…` : "Starting…");
+        await new Promise((r) => setTimeout(r, 2000));
+        s = await ask("GET");
+      }
+      if (s.error) throw new Error(s.error);
+      btn.disabled = false;
+      btn.onclick = () => location.reload();
+      say(s.filled ? `Found ${num(s.filled)} files · Reload` : "Nothing new found · Reload",
+        s.missing ? `${num(s.missing)} items couldn't be looked up.` : "");
+    };
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await follow(await ask("POST"));
+      } catch (e) {
+        btn.disabled = false;
+        if (e.expired) say("Still running · Reload later", "The page's access ran out; the plugin keeps filling in formats.");
+        else say("Couldn't fill in formats", e.message);
+      }
+    };
+    return btn;
   }
 
   // ---------- Breakdown tab ----------

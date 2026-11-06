@@ -51,6 +51,18 @@
       "access": "admin"
     },
     {
+      "id": "formats-backfill-status",
+      "method": "GET",
+      "path": "/formats/backfill",
+      "access": "admin"
+    },
+    {
+      "id": "formats-backfill",
+      "method": "POST",
+      "path": "/formats/backfill",
+      "access": "admin"
+    },
+    {
       "id": "assets",
       "method": "GET",
       "path": "/assets/*",

@@ -35,6 +35,7 @@ type Handler struct {
 	mu      sync.RWMutex
 	syncer  *Syncer
 	tracker *Tracker // nil unless client tracking is on
+	formats FormatSource
 	// problem, when set, is shown instead of the reports (no API key).
 	problem string
 	options *Options
@@ -100,6 +101,40 @@ func (h *Handler) Configure(syncer *Syncer, tracker *Tracker, problem string) {
 	h.syncer, h.tracker, h.problem = syncer, tracker, problem
 }
 
+// SetFormatSource sets where the format backfill reads the catalog.
+func (h *Handler) SetFormatSource(src FormatSource) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.formats = src
+}
+
+// handleBackfill starts filling in file formats (POST) or reports how far it
+// got (GET).
+func (h *Handler) handleBackfill(req *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
+	_, tracker, _ := h.parts()
+	h.mu.RLock()
+	src := h.formats
+	h.mu.RUnlock()
+	if tracker == nil || src == nil {
+		return jsonResponse(http.StatusConflict, []byte(`{"error":"Turn on Track clients in the plugin's settings first."}`))
+	}
+	status := tracker.Backfill()
+	switch req.GetMethod() {
+	case http.MethodGet, http.MethodHead:
+	case http.MethodPost:
+		// Same guard as /settings: a cross-site form can't send JSON.
+		if ct, _, _ := strings.Cut(header(req, "Content-Type"), ";"); !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
+			return jsonResponse(http.StatusUnsupportedMediaType, []byte(`{"error":"Send JSON."}`))
+		}
+		plays, _ := h.Store.Snapshot()
+		status = tracker.StartBackfill(src, plays)
+	default:
+		return text(http.StatusMethodNotAllowed, "method not allowed")
+	}
+	body, _ := json.Marshal(status)
+	return jsonResponse(http.StatusOK, body)
+}
+
 func (h *Handler) parts() (*Syncer, *Tracker, string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -117,6 +152,9 @@ func (h *Handler) Handle(ctx context.Context, req *pluginv1.HandleHTTPRequest) (
 	}
 	if req.GetPath() == "/settings" {
 		return h.handleColors(ctx, req), nil
+	}
+	if req.GetPath() == "/formats/backfill" {
+		return h.handleBackfill(req), nil
 	}
 	if req.GetMethod() != http.MethodGet && req.GetMethod() != http.MethodHead {
 		return text(http.StatusMethodNotAllowed, "method not allowed"), nil

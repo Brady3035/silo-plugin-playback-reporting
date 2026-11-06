@@ -119,6 +119,10 @@ type Tracker struct {
 	// files maps file IDs to their formats; filesDirty is set until saved.
 	files      map[string]FileFormat
 	filesDirty bool
+	// formatSave keeps the periodic save and a backfill's from writing
+	// clients/formats at once, which could leave the older copy saved.
+	formatSave sync.Mutex
+	backfill   BackfillStatus
 }
 
 // NewTracker returns a tracker; Run starts it.
@@ -355,6 +359,8 @@ func (t *Tracker) loadFormats(ctx context.Context) bool {
 
 // saveFormats writes the file formats when they changed.
 func (t *Tracker) saveFormats(ctx context.Context) {
+	t.formatSave.Lock()
+	defer t.formatSave.Unlock()
 	t.mu.Lock()
 	if !t.filesDirty {
 		t.mu.Unlock()
