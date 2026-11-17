@@ -13,7 +13,6 @@
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const FULL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   const PAGE = 25;
-  const MAX_SERIES = 8;
 
   const $ = (id) => document.getElementById(id);
   const statusEl = $("status");
@@ -1050,7 +1049,6 @@
       const groups = groupBy(plays, key, measure);
       const orderFixed = stack === "stream" ? STREAMS.map((s) => s[0]) : stack === "cat" ? CATS.map((c) => c[0]) : null;
       if (orderFixed) groups.sort((a, b2) => orderFixed.indexOf(a.key) - orderFixed.indexOf(b2.key));
-      const shown = stack === "user" ? groups.slice(0, MAX_SERIES) : groups;
       // drill: how History narrows to one series when its segment is clicked.
       const catOffered = new Set(catFilter().map(([v]) => v));
       const drillFor = (g) => {
@@ -1058,15 +1056,10 @@
         if (stack === "cat") return catOffered.has(g.key) ? { cat: g.key } : { values: { type: CAT_LABEL[g.key] } };
         return { extra: [split ? { k: "profile", v: g.key, l: `Profile: ${who(g.items[0])}` } : { k: "user", v: g.key, l: `User: ${g.items[0].user}` }] };
       };
-      const series = shown.map((g, i) => ({
+      const series = groups.map((g, i) => ({
         name: name(g), items: g.items, values: new Array(b.list.length).fill(0), drill: drillFor(g),
         color: stack === "user" ? seriesColor(i) : stack === "stream" ? streamColor(g.key) : catColor(g.key),
       }));
-      const rest = groups.slice(shown.length);
-      if (rest.length) {
-        series.push({ name: `${rest.length} more`, items: rest.flatMap((g) => g.items), values: new Array(b.list.length).fill(0), color: "var(--c-other)",
-          drill: { extra: [{ k: split ? "profiles" : "users", v: rest.map((g) => g.key), l: `${num(rest.length)} other ${split ? "profiles" : "users"}` }] } });
-      }
       const f = MEASURES[measure];
       for (const s of series) {
         const values = s.values;
@@ -1074,7 +1067,7 @@
       }
       const what = { time: "Watch time", plays: "Plays", smart: "Smart plays" }[measure];
       const people = stack === "user" ? groups : groupBy(plays, split ? (p) => p.profileKey : (p) => p.userId, measure);
-      const colorOf = new Map(shown.map((g, i) => [g.key, seriesColor(i)]));
+      const colorOf = new Map(groups.map((g, i) => [g.key, seriesColor(i)]));
       const cat = setting(T, "cat", "all");
       // Clicking a column opens its dates in History; a segment also narrows
       // to that segment's user, stream type or media type.
